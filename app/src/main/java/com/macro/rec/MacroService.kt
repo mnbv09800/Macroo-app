@@ -201,3 +201,210 @@ class MacroService : AccessibilityService() {
         }
         wm.addView(panel, lp)
         refresh()
+    }    fun hidePanel() {
+        stopAll()
+        if (!panelOn) return
+        panelOn = false
+        try {
+            wm.removeView(panel)
+            wm.removeView(shield)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun refresh() {
+        if (!panelOn) return
+        status.text = "${steps.size}"
+        slotBtn.text = Store.macros[Store.cur].name
+    }
+
+    // تبديل الماكرو من اللوحة
+    private fun nextSlot() {
+        stopAll()
+        Store.cur = (Store.cur + 1) % Store.macros.size
+        Store.save(this)
+        refresh()
+    }
+
+    // ---- التسجيل ----
+    private fun setTouchable(on: Boolean) {
+        shieldLp.flags = if (on) shieldLp.flags and LP.FLAG_NOT_TOUCHABLE.inv()
+        else shieldLp.flags or LP.FLAG_NOT_TOUCHABLE
+        wm.updateViewLayout(shield, shieldLp)
+    }
+
+    // نمرّر نفس الضغطة للعبة (والطبقة تصير غير لمسية لحظياً حتى ما تسجلها مرة ثانية)
+    private fun inject(st: Step) {
+        inj++
+        setTouchable(false)
+        tap(st) {
+            inj--
+            if (inj == 0 && recording) setTouchable(true)
+        }
+    }
+
+    // لقطة تتحدث كل 0.8 ثانية وقت التسجيل (هذي "الشاشة قبل الضغطة")
+    private fun poll() {
+        if (!recording) return
+        shot { if (it != null) latest = it }
+        h.postDelayed({ poll() }, 800)
+    }
+
+    // يتعلم لحاله: إذا الضغطة غيّرت الشاشة بشكل واضح (مثل زر الهجوم) يعلّمها للتحقق
+    // الضغطات السريعة المتتالية (مثل نشر القوات) ما تتعلّم، وتكدر تعدّلها من التطبيق
+    private fun learn(st: Step, a: IntArray?) {
+        if (a == null || st.before in 1L..1499L) return
+        val n = steps.size
+        val cur = Store.cur
+        waitChange(a, System.currentTimeMillis() + 3000) { ok ->
+            if (ok && steps.size == n && cur == Store.cur) {
+                st.verify = true
+                Store.save(this)
+            }
+        }
+    }
+
+    private fun startRec() {
+        stopAll()
+        steps.clear()
+        lastEnd = 0L
+        latest = null
+        recording = true
+        icRec.on = true
+        shield.setBackgroundColor(0x22FF0000)
+        setTouchable(true)
+        refresh()
+        poll()
+    }
+
+    fun stopAll() {
+        if (recording && steps.isNotEmpty()) Store.save(this)
+        recording = false
+        playing = false
+        h.removeCallbacksAndMessages(null)
+        if (panelOn) {
+            shield.setBackgroundColor(0)
+            setTouchable(false)
+            icRec.on = false
+            icPlay.on = false
+        }
+    }
+
+        // ---- التشغيل ----
+    private fun startPlay() {
+        stopAll()
+        if (steps.isEmpty()) return
+        playing = true
+        loopNo = 0
+        icPlay.on = true
+        refresh()
+        h.postDelayed({ if (playing) play(0) }, 1500)
+    }
+
+    // يشغّل الخطوة i ثم اللي بعدها، وبعد آخر خطوة يبدأ دورة جديدة
+    private fun play(i: Int) {
+        val list = steps
+        if (list.isEmpty()) {
+            stopAll()
+            return
+        }
+        if (i >= list.size) {
+            loopNo++
+            if (Store.cfg.loops in 1..loopNo) {
+                stopAll()
+                return
+            }
+            h.postDelayed({ if (playing) play(0) }, Store.cfg.loopGap)
+            return
+        }
+        val s = list[i]
+        h.postDelayed({
+            if (playing) go(s, 0) { play(i + 1) }
+        }, s.before)
+    }
+
+    // ينفذ الخطوة، وإذا كانت معلّمة للتحقق ينتظر تغيّر الشاشة، وإذا ما صار يعيدها
+    private fun go(s: Step, tries: Int, next: () -> Unit) {
+        if (!playing) return
+        if (!s.verify) {
+            burst(s, s.repeat, next)
+            return
+        }
+        shot { a ->
+            burst(s, s.repeat) {
+                if (a == null) next()
+                else waitChange(a, System.currentTimeMillis() + Store.cfg.timeout) { ok ->
+                    when {
+                        !playing -> {}
+                        ok -> next()
+                        tries >= Store.cfg.tries -> { stopAll(); status.text = "❌" }
+                        else -> go(s, tries + 1, next)
+                    }
+                }
+            }
+        }
+    }
+
+    // تكرار الضغطة n مرة بالفاصل اللي حددته
+    private fun burst(s: Step, n: Int, done: () -> Unit) {
+        tap(s) {
+            if (n <= 1) done()
+            else h.postDelayed({ if (playing) burst(s, n - 1, done) }, s.repGap)
+        }
+    }
+
+    private fun waitChange(a: IntArray, end: Long, cb: (Boolean) -> Unit) {
+        h.postDelayed({
+            shot { b ->
+                when {
+                    b != null && diff(a, b) > Store.cfg.change -> cb(true)
+                    System.currentTimeMillis() > end -> cb(false)
+                    else -> waitChange(a, end, cb)
+                }
+            }
+        }, 600)
+    }
+
+    private fun tap(s: Step, done: () -> Unit) {
+        val p = Path().apply {
+            moveTo(s.x1, s.y1)
+            if (abs(s.x2 - s.x1) > 20 || abs(s.y2 - s.y1) > 20) lineTo(s.x2, s.y2)
+        }
+        val g = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(p, 0, s.dur))
+            .build()
+        val ok = dispatchGesture(g, object : GestureResultCallback() {
+            override fun onCompleted(d: GestureDescription?) { done() }
+            override fun onCancelled(d: GestureDescription?) { done() }
+        }, null)
+        if (!ok) done()
+    }
+
+    // لقطة شاشة مصغّرة (24×48) نقارن بيها قبل وبعد الضغطة
+    private fun shot(cb: (IntArray?) -> Unit) {
+        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(r: ScreenshotResult) {
+                val hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
+                val sw = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                r.hardwareBuffer.close()
+                if (sw == null) { cb(null); return }
+                val small = Bitmap.createScaledBitmap(sw, 24, 48, true)
+                val px = IntArray(24 * 48)
+                small.getPixels(px, 0, 24, 0, 0, 24, 48)
+                cb(px)
+            }
+            override fun onFailure(errorCode: Int) { cb(null) }
+        })
+    }
+
+    private fun lum(c: Int) = (Color.red(c) * 3 + Color.green(c) * 6 + Color.blue(c)) / 10
+
+    private fun diff(a: IntArray, b: IntArray): Double {
+        var s = 0L
+        for (i in a.indices) s += abs(lum(a[i]) - lum(b[i]))
+        return s.toDouble() / a.size
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onInterrupt() {}
+}
