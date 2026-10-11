@@ -210,9 +210,10 @@ class MainActivity : Activity() {
             r5.background = box(Color.parseColor("#0F172A"), 12, LINE)
             r5.setPadding(dp(12), dp(8), dp(4), dp(8))
             r5.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(8), 0, 0) }
-            val got = Store.anchors.containsKey(d.id)
+            val cnt = Store.anchors[d.id]?.size ?: 0
+            val got = cnt > 0
             val label = tv(
-                "${i + 1}  " + (if (got) "✔ " else "✖ ") + d.name + "\n" + Store.kindName(d.kind),
+                "${i + 1}  " + (if (got) "✔ " else "✖ ") + d.name + (if (cnt > 1) " ($cnt صور)" else "") + "\n" + Store.kindName(d.kind),
                 14f, if (got || d.kind == 3) TX else RD
             )
             label.layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
@@ -250,7 +251,7 @@ class MainActivity : Activity() {
         val c4 = card()
         c4.addView(tv("الإعدادات العامة", 17f, TX, true))
         c4.addView(
-            tv("سرعة الفحص ${cf.poll}ms • منع التكرار ${cf.repress}ms • دورات $lp", 13f, DIM).apply {
+            tv("سرعة الفحص ${cf.poll}ms • حساسية الأزرار ${cf.match} • منع التكرار ${cf.repress}ms • دورات $lp", 13f, DIM).apply {
                 setPadding(0, dp(8), 0, 0)
             }
         )
@@ -486,6 +487,7 @@ class MainActivity : Activity() {
         lay.setPadding(dp(20), dp(10), dp(20), 0)
         val pl = num(lay, "سرعة الفحص (ms) كل ما قلّت صار أسرع (الأدنى 350)", cf.poll)
         val rp = num(lay, "منع تكرار الضغط على نفس الزر (ms)", cf.repress)
+        val mt = num(lay, "حساسية التعرف على الأزرار (أعلى = أسهل يتعرف، الافتراضي 10)", cf.match.toLong())
         val t = num(lay, "انتظار تغيّر الشاشة بعد الضغطة (ثانية)", cf.timeout / 1000)
         val k = num(lay, "أقصى عدد محاولات إعادة الضغط", cf.tries.toLong())
         val c = num(lay, "حساسية تغيّر الشاشة (قلّلها = أحسس)", cf.change.toLong())
@@ -497,6 +499,7 @@ class MainActivity : Activity() {
             .setPositiveButton("حفظ") { _, _ ->
                 cf.poll = (pl.text.toString().toLongOrNull() ?: 400L).coerceIn(350L, 5000L)
                 cf.repress = (rp.text.toString().toLongOrNull() ?: 1500L).coerceIn(300L, 10000L)
+                cf.match = (mt.text.toString().toIntOrNull() ?: 10).coerceIn(3, 60)
                 cf.timeout = (t.text.toString().toLongOrNull() ?: 4L).coerceIn(1L, 60L) * 1000
                 cf.tries = (k.text.toString().toIntOrNull() ?: 20).coerceIn(1, 200)
                 cf.change = (c.text.toString().toIntOrNull() ?: 8).coerceIn(1, 100)
