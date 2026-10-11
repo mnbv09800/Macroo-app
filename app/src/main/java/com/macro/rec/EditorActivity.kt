@@ -292,9 +292,18 @@ class EditorActivity : Activity() {
                     render()
                 })
             }
+            for (r in Store.res) {
+                bar.addView(chip((if (r.w > 0) "✔ " else "") + r.icon + " " + r.name, r.id == role) {
+                    role = r.id
+                    sv.sel = null
+                    sv.invalidate()
+                    render()
+                })
+            }
             foot.addView(btn("حفظ الزر", GR) { saveAnchor() })
             foot.addView(btn("مسح صورة الزر", RD) {
                 Store.anchors.remove(role)
+                Store.res.firstOrNull { it.id == role }?.let { it.w = 0 }
                 Store.save(this)
                 render()
             })
@@ -323,7 +332,8 @@ class EditorActivity : Activity() {
     }
 
     private fun saveAnchor() {
-        if (Store.btns.none { it.id == role }) {
+        val rs = Store.res.firstOrNull { it.id == role }
+        if (rs == null && Store.btns.none { it.id == role }) {
             Toast.makeText(this, "اختر زر من فوق أول", Toast.LENGTH_SHORT).show()
             return
         }
@@ -337,7 +347,14 @@ class EditorActivity : Activity() {
         val y = s.top.toInt()
         val w = s.width().toInt()
         val h = s.height().toInt()
-        Store.anchors[role] = Anchor(role, x, y, w, h, Vision.sig(bmp, x, y, w, h))
+        if (rs != null) {
+            rs.x = x
+            rs.y = y
+            rs.w = w
+            rs.h = h
+        } else {
+            Store.anchors[role] = Anchor(role, x, y, w, h, Vision.sig(bmp, x, y, w, h))
+        }
         Store.save(this)
         sv.sel = null
         sv.invalidate()
