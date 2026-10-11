@@ -343,6 +343,8 @@ class EditorActivity : Activity() {
             Toast.makeText(this, "حدد مستطيل حوالين الزر أول (اسحب بإصبعك)", Toast.LENGTH_SHORT).show()
             return
         }
+        Store.refW = bmp.width
+        Store.refH = bmp.height
         val x = s.left.toInt()
         val y = s.top.toInt()
         val w = s.width().toInt()
