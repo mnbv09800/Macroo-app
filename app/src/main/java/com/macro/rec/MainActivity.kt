@@ -45,7 +45,7 @@ class MainActivity : Activity() {
         setContentView(sv)
     }
 
-        override fun onResume() {
+            override fun onResume() {
         super.onResume()
         MacroService.inst?.stopAll()
         if (Shared.pending) {
