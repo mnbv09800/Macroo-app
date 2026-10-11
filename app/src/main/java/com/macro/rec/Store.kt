@@ -45,6 +45,9 @@ class Anchor(
     val cy: Int get() = y + h / 2
 }
 
+// زر معرّف من المستخدم: id ثابت، اسم، ونوع (0 عادي، 1 بداية الهجوم، 2 نهاية الجولة، 3 موافق)
+class Btn(val id: String, var name: String, var kind: Int)
+
 // لقطة الشاشة الأخيرة (تنتقل بين الخدمة والمحرر)
 object Shared {
     var shot: Bitmap? = null
@@ -83,16 +86,29 @@ object Store {
     var cur = 0
     val cfg = Cfg()
     val anchors = HashMap<String, Anchor>()
-    val roles = listOf(
-        "attack" to "زر الهجوم (القرية)",
-        "find" to "زر البحث عن خصم",
-        "next" to "زر Next",
-        "home" to "زر Return Home",
-        "ok" to "زر موافق (اختياري)"
+    // الأزرار بالترتيب (البوت يفحصها من فوق لتحت)
+    val btns = ArrayList<Btn>()
+    val kinds = listOf(
+        "ضغطة عادية",
+        "بداية الهجوم (ينفذ الخطة المرسومة)",
+        "نهاية الجولة (يرجع للبداية)",
+        "موافق / إغلاق (يضغطه بأي وقت)"
     )
     private var ready = false
 
-    fun roleName(k: String): String = roles.firstOrNull { it.first == k }?.second ?: k
+    fun kindName(k: Int): String = kinds.getOrElse(k) { kinds[0] }
+
+    fun roleName(k: String): String = btns.firstOrNull { it.id == k }?.name ?: k
+
+    fun defaultBtns() {
+        btns.clear()
+        btns.add(Btn("attack", "زر الهجوم (القرية)", 0))
+        btns.add(Btn("go", "زر Attack الأخضر (الجيش)", 0))
+        btns.add(Btn("find", "زر البحث عن خصم", 0))
+        btns.add(Btn("next", "زر Next", 1))
+        btns.add(Btn("home", "زر Return Home", 2))
+        btns.add(Btn("ok", "زر موافق (اختياري)", 3))
+    }
 
     fun ensure(c: Context) {
         if (!ready) { load(c); ready = true }
@@ -120,7 +136,9 @@ object Store {
             JSONObject().put("r", a.role).put("x", a.x).put("y", a.y).put("w", a.w).put("h", a.h)
                 .put("g", a.sig.joinToString(","))
         )
-        val o = JSONObject().put("cur", cur).put("m", ms).put("an", an)
+        val bt = JSONArray()
+        for (d in btns) bt.put(JSONObject().put("i", d.id).put("n", d.name).put("k", d.kind))
+        val o = JSONObject().put("cur", cur).put("m", ms).put("an", an).put("bt", bt)
             .put("t", cfg.timeout).put("k", cfg.tries).put("c", cfg.change)
             .put("lg", cfg.loopGap).put("lp", cfg.loops).put("mt", cfg.match)
         c.getSharedPreferences("m4", Context.MODE_PRIVATE).edit()
@@ -130,6 +148,7 @@ object Store {
     private fun load(c: Context) {
         macros.clear()
         anchors.clear()
+        btns.clear()
         val raw = c.getSharedPreferences("m4", Context.MODE_PRIVATE).getString("db", null)
         if (raw != null) {
             try {
@@ -141,6 +160,13 @@ object Store {
                 cfg.loopGap = o.optLong("lg", 2000L)
                 cfg.loops = o.optInt("lp", 0)
                 cfg.match = o.optInt("mt", 10)
+                val bt = o.optJSONArray("bt")
+                if (bt != null) {
+                    for (i in 0 until bt.length()) {
+                        val q = bt.getJSONObject(i)
+                        btns.add(Btn(q.getString("i"), q.getString("n"), q.getInt("k")))
+                    }
+                }
                 val ms = o.getJSONArray("m")
                 for (i in 0 until ms.length()) {
                     val mo = ms.getJSONObject(i)
@@ -176,6 +202,7 @@ object Store {
             } catch (e: Exception) {
             }
         }
+        if (btns.isEmpty()) defaultBtns()
         if (macros.isEmpty()) macros.add(Macro("M1"))
         if (cur !in macros.indices) cur = 0
     }
