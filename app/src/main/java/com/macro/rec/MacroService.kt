@@ -278,9 +278,17 @@ class MacroService : AccessibilityService() {
     // ---- العقل: يفهم الشاشة ويقرر ----
     private fun botStart() {
         stopAll()
-        val need = listOf("attack", "find", "next", "home").filter { !Store.anchors.containsKey(it) }
+        val need = Store.btns.filter { it.kind != 3 && !Store.anchors.containsKey(it.id) }
         if (need.isNotEmpty()) {
-            toast("ناقص: " + need.joinToString(" • ") { Store.roleName(it) })
+            toast("ناقص: " + need.joinToString(" • ") { it.name })
+            return
+        }
+        if (Store.btns.none { it.kind == 1 }) {
+            toast("ما أكو زر نوعه (بداية الهجوم)")
+            return
+        }
+        if (Store.btns.none { it.kind == 2 }) {
+            toast("ما أكو زر نوعه (نهاية الجولة)")
             return
         }
         if (steps.isEmpty()) {
@@ -310,25 +318,18 @@ class MacroService : AccessibilityService() {
                 tick(1500)
                 return@grab
             }
-            when {
-                seen(b, "ok") -> {
-                    press("ok")
-                    tick(1500)
+            // أزرار "موافق" أول شي، وبعدها الباقي حسب ترتيبك
+            var hit: Btn? = null
+            for (x in Store.btns.sortedBy { if (it.kind == 3) 0 else 1 }) {
+                if (phase == 1 && x.kind == 0) continue
+                if (seen(b, x.id)) {
+                    hit = x
+                    break
                 }
-                seen(b, "home") -> {
-                    phase = 0
-                    unknown = 0
-                    rounds++
-                    say("🏠$rounds")
-                    press("home")
-                    tick(3000)
-                }
-                seen(b, "next") -> {
-                    unknown = 0
-                    say("🔍")
-                    scout()
-                }
-                phase == 1 -> {
+            }
+            val d = hit
+            if (d == null) {
+                if (phase == 1) {
                     waited++
                     if (waited > 150) {
                         phase = 0
@@ -336,24 +337,37 @@ class MacroService : AccessibilityService() {
                     }
                     say("⚔")
                     tick(2500)
-                }
-                seen(b, "find") -> {
-                    unknown = 0
-                    say("🔍")
-                    press("find")
-                    tick(3000)
-                }
-                seen(b, "attack") -> {
-                    unknown = 0
-                    say("🏠")
-                    press("attack")
-                    tick(2500)
-                }
-                else -> {
+                } else {
                     unknown++
                     say("؟$unknown")
                     if (unknown % 40 == 0) performGlobalAction(GLOBAL_ACTION_BACK)
                     tick(1500)
+                }
+            } else {
+                when (d.kind) {
+                    3 -> {
+                        press(d.id)
+                        tick(1500)
+                    }
+                    2 -> {
+                        phase = 0
+                        unknown = 0
+                        rounds++
+                        say("🏠$rounds")
+                        press(d.id)
+                        tick(3000)
+                    }
+                    1 -> {
+                        unknown = 0
+                        say("🔍")
+                        scout()
+                    }
+                    else -> {
+                        unknown = 0
+                        say("▶")
+                        press(d.id)
+                        tick(3000)
+                    }
                 }
             }
             b.recycle()
