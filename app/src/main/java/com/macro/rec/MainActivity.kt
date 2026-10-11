@@ -47,7 +47,7 @@ class MainActivity : Activity() {
         setContentView(sv)
     }
 
-            override fun onResume() {
+    override fun onResume() {
         super.onResume()
         MacroService.inst?.stopAll()
         if (Shared.pending) {
@@ -224,6 +224,25 @@ class MainActivity : Activity() {
         c5.addView(btn("+ زر جديد", GR) { editBtn(null) })
         root.addView(c5)
 
+        // الموارد
+        val c6 = card()
+        c6.addView(tv("الموارد (حد أدنى للهجوم)", 17f, TX, true))
+        c6.addView(tv("الصفر = ما يفحص هذا المورد. حدد مكان الرقم من 📷 ثم اختر المورد من فوق.", 12f, DIM).apply {
+            setPadding(0, dp(6), 0, 0)
+        })
+        for (r in Store.res) {
+            val got = r.w > 0
+            val t = "${r.icon} ${r.name}   " + (if (got) "✔" else "✖ المنطقة ما انحددت") + "   " +
+                (if (r.min > 0) "الحد: ${r.min}" else "معطّل")
+            c6.addView(tv(t, 14f, if (got) TX else RD).apply {
+                background = box(Color.parseColor("#0F172A"), 12, LINE)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(8), 0, 0) }
+                setOnClickListener { editRes(r) }
+            })
+        }
+        root.addView(c6)
+
         // الإعدادات العامة
         val cf = Store.cfg
         val lp = if (cf.loops == 0) "∞" else "${cf.loops}"
@@ -304,6 +323,20 @@ class MainActivity : Activity() {
             }
         }
         dlg.show()
+    }
+
+    private fun editRes(r: Res) {
+        val lay = LinearLayout(this)
+        lay.orientation = LinearLayout.VERTICAL
+        lay.setPadding(dp(20), dp(10), dp(20), 0)
+        val m = num(lay, "الحد الأدنى لـ ${r.name} (0 = معطّل)", r.min)
+        AlertDialog.Builder(this).setTitle(r.name).setView(lay)
+            .setPositiveButton("حفظ") { _, _ ->
+                r.min = (m.text.toString().toLongOrNull() ?: 0L).coerceIn(0L, 100000000L)
+                Store.save(this)
+                render()
+            }
+            .setNegativeButton("إلغاء", null).show()
     }
 
     private fun toggle() {
