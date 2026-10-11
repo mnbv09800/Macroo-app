@@ -26,6 +26,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlin.math.abs
 
 // أيقونات اللوحة العائمة (1 تشغيل، 2 إيقاف، 3 سحب، 4 كاميرا، 5 عين)
@@ -103,6 +106,8 @@ class MacroService : AccessibilityService() {
     private var unknown = 0
     private var waited = 0
     private var rounds = 0
+    private var skips = 0
+    private var readFails = 0
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -220,7 +225,8 @@ class MacroService : AccessibilityService() {
             refresh()
         }
     }
-        // ---- لقطة الشاشة ----
+
+    // ---- لقطة الشاشة ----
     private fun grab(cb: (Bitmap?) -> Unit) {
         takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(r: ScreenshotResult) {
@@ -259,8 +265,47 @@ class MacroService : AccessibilityService() {
                 return@grab
             }
             val hit = Store.anchors.keys.filter { seen(b, it) }
-            toast(if (hit.isEmpty()) "ما شفت أي زر" else "شفت: " + hit.joinToString(" • ") { Store.roleName(it) })
+            val msg = if (hit.isEmpty()) "ما شفت أي زر" else "شفت: " + hit.joinToString(" • ") { Store.roleName(it) }
+            val on = Store.res.filter { it.w > 0 }
+            if (on.isEmpty()) {
+                toast(msg)
+            } else {
+                readAll(b, on) { vals ->
+                    toast(msg + "\n" + on.indices.joinToString(" • ") { "${on[it].icon} ${vals[it] ?: "؟"}" })
+                }
+            }
             b.recycle()
+        }
+    }
+
+    private val ocr by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+
+    // نقرأ الرقم من كل منطقة بالـOCR (ننسخ المنطقة أول، فاللقطة الأصلية تنحذف براحتها)
+    private fun readAll(b: Bitmap, list: List<Res>, cb: (List<Long?>) -> Unit) {
+        val out = arrayOfNulls<Long>(list.size)
+        var left = list.size
+        if (left == 0) {
+            cb(out.toList())
+            return
+        }
+        list.forEachIndexed { i, r ->
+            val x0 = r.x.coerceIn(0, b.width - 2)
+            val y0 = r.y.coerceIn(0, b.height - 2)
+            val w0 = r.w.coerceIn(2, b.width - x0)
+            val h0 = r.h.coerceIn(2, b.height - y0)
+            val crop = Bitmap.createBitmap(b, x0, y0, w0, h0)
+            val k = (90f / h0).coerceIn(1f, 4f)
+            val big = Bitmap.createScaledBitmap(crop, (w0 * k).toInt(), (h0 * k).toInt(), true)
+            ocr.process(InputImage.fromBitmap(big, 0))
+                .addOnSuccessListener { t ->
+                    out[i] = t.text.filter { it.isDigit() }.toLongOrNull()
+                    left--
+                    if (left == 0) cb(out.toList())
+                }
+                .addOnFailureListener {
+                    left--
+                    if (left == 0) cb(out.toList())
+                }
         }
     }
 
@@ -295,11 +340,18 @@ class MacroService : AccessibilityService() {
             toast("ارسم الهجوم أول من المحرر (📷 ثم رسم الهجوم)")
             return
         }
+        val noReg = Store.res.filter { it.min > 0 && it.w <= 0 }
+        if (noReg.isNotEmpty()) {
+            toast("حدد منطقة الرقم لـ: " + noReg.joinToString(" • ") { it.name })
+            return
+        }
         bot = true
         phase = 0
         unknown = 0
         waited = 0
         rounds = 0
+        skips = 0
+        readFails = 0
         icPlay.on = true
         tick(800)
     }
@@ -359,8 +411,36 @@ class MacroService : AccessibilityService() {
                     }
                     1 -> {
                         unknown = 0
-                        say("🔍")
-                        scout()
+                        val on = Store.res.filter { it.min > 0 && it.w > 0 }
+                        if (on.isEmpty()) {
+                            say("🔍")
+                            scout()
+                        } else {
+                            readAll(b, on) { vals ->
+                                if (!bot) return@readAll
+                                val txt = on.indices.joinToString(" ") { "${on[it].icon}${vals[it] ?: "؟"}" }
+                                if (vals.any { it == null }) {
+                                    readFails++
+                                    if (readFails >= 5) {
+                                        stopAll()
+                                        toast("ما كدرت أقرأ الأرقام. تأكد من المستطيل (جرّب 👁)")
+                                        return@readAll
+                                    }
+                                } else {
+                                    readFails = 0
+                                }
+                                val pass = on.indices.all { (vals[it] ?: -1L) >= on[it].min }
+                                if (pass) {
+                                    say("✅ $txt")
+                                    scout()
+                                } else {
+                                    skips++
+                                    say("⏭$skips $txt")
+                                    press(d.id)
+                                    tick(2500)
+                                }
+                            }
+                        }
                     }
                     else -> {
                         unknown = 0
@@ -374,7 +454,7 @@ class MacroService : AccessibilityService() {
         }
     }
 
-    // وصلنا لشاشة البحث: ننفذ خطة الهجوم (المرحلة الجاية: نقرأ الغنائم قبل ما نقرر)
+    // وصلنا لشاشة البحث: ننفذ خطة الهجوم
     private fun scout() {
         phase = 1
         waited = 0
