@@ -14,6 +14,8 @@ import android.view.View
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
@@ -181,7 +183,7 @@ class MainActivity : Activity() {
         val c3 = card()
         c3.addView(tv("خطوات ${m.name} (${m.steps.size})", 17f, TX, true))
         if (m.steps.isEmpty()) {
-            c3.addView(tv("ما أكو خطوات. اضغط ابدأ، وسجّل من اللوحة العائمة.", 13f, DIM).apply {
+            c3.addView(tv("ما أكو خطوات. من اللوحة العائمة اضغط 📷 ثم «رسم الهجوم».", 13f, DIM).apply {
                 setPadding(0, dp(8), 0, 0)
             })
         }
@@ -198,6 +200,30 @@ class MainActivity : Activity() {
         }
         root.addView(c3)
 
+        // الأزرار
+        val c5 = card()
+        c5.addView(tv("الأزرار (البوت يفحصها من فوق لتحت)", 17f, TX, true))
+        Store.btns.forEachIndexed { i, d ->
+            val r5 = LinearLayout(this)
+            r5.gravity = Gravity.CENTER_VERTICAL
+            r5.background = box(Color.parseColor("#0F172A"), 12, LINE)
+            r5.setPadding(dp(12), dp(8), dp(4), dp(8))
+            r5.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(8), 0, 0) }
+            val got = Store.anchors.containsKey(d.id)
+            val label = tv(
+                "${i + 1}  " + (if (got) "✔ " else "✖ ") + d.name + "\n" + Store.kindName(d.kind),
+                14f, if (got || d.kind == 3) TX else RD
+            )
+            label.layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+            label.setOnClickListener { editBtn(d) }
+            r5.addView(label)
+            r5.addView(arrow("▲") { moveBtn(i, -1) })
+            r5.addView(arrow("▼") { moveBtn(i, 1) })
+            c5.addView(r5)
+        }
+        c5.addView(btn("+ زر جديد", GR) { editBtn(null) })
+        root.addView(c5)
+
         // الإعدادات العامة
         val cf = Store.cfg
         val lp = if (cf.loops == 0) "∞" else "${cf.loops}"
@@ -210,6 +236,74 @@ class MainActivity : Activity() {
         )
         c4.addView(btn("تعديل", CY) { editCfg() })
         root.addView(c4)
+    }
+
+    private fun arrow(t: String, click: () -> Unit) = TextView(this).apply {
+        text = t
+        textSize = 18f
+        setTextColor(CY)
+        gravity = Gravity.CENTER
+        setPadding(dp(14), dp(6), dp(14), dp(6))
+        setOnClickListener { click() }
+    }
+
+    private fun moveBtn(i: Int, d: Int) {
+        val j = i + d
+        if (j !in Store.btns.indices) return
+        val t = Store.btns[i]
+        Store.btns[i] = Store.btns[j]
+        Store.btns[j] = t
+        Store.save(this)
+        render()
+    }
+
+    private fun editBtn(d: Btn?) {
+        val lay = LinearLayout(this)
+        lay.orientation = LinearLayout.VERTICAL
+        lay.setPadding(dp(20), dp(10), dp(20), 0)
+        val e = EditText(this)
+        e.setText(d?.name ?: "")
+        e.hint = "اسم الزر"
+        lay.addView(e)
+        lay.addView(tv("شنو يسوي البوت لما يشوفه؟", 13f, DIM).apply { setPadding(0, dp(12), 0, 0) })
+        val g = RadioGroup(this)
+        Store.kinds.forEachIndexed { i, k ->
+            val rb = RadioButton(this)
+            rb.id = 100 + i
+            rb.text = k
+            g.addView(rb)
+        }
+        g.check(100 + (d?.kind ?: 0))
+        lay.addView(g)
+        val scroll = ScrollView(this)
+        scroll.addView(lay)
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(if (d == null) "زر جديد" else "تعديل الزر")
+            .setView(scroll)
+            .setPositiveButton("حفظ") { _, _ ->
+                val n = e.text.toString().trim()
+                val k = (g.checkedRadioButtonId - 100).coerceIn(0, Store.kinds.size - 1)
+                if (n.isNotEmpty()) {
+                    if (d == null) {
+                        Store.btns.add(Btn("b" + System.currentTimeMillis(), n, k))
+                    } else {
+                        d.name = n
+                        d.kind = k
+                    }
+                    Store.save(this)
+                    render()
+                }
+            }
+            .setNegativeButton("إلغاء", null)
+        if (d != null) {
+            dlg.setNeutralButton("حذف") { _, _ ->
+                Store.btns.remove(d)
+                Store.anchors.remove(d.id)
+                Store.save(this)
+                render()
+            }
+        }
+        dlg.show()
     }
 
     private fun toggle() {
