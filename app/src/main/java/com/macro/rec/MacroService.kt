@@ -111,8 +111,41 @@ class MacroService : AccessibilityService() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private val hb = Handler(Looper.getMainLooper())
+    private var banner: TextView? = null
+
+    // شريط رسائل على الشاشة (بدل Toast لأن بعض الأجهزة تخفيه)
     private fun toast(t: String) {
-        Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
+        try {
+            banner?.let {
+                try { wm.removeView(it) } catch (e: Exception) {}
+            }
+            val tv = TextView(this).apply {
+                text = t
+                textSize = 15f
+                setTextColor(Color.WHITE)
+                setPadding(dp(16), dp(10), dp(16), dp(10))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#F00B1220"))
+                    cornerRadius = dp(16).toFloat()
+                    setStroke(dp(1), Color.parseColor("#4422D3EE"))
+                }
+            }
+            val lp = LP(
+                LP.WRAP_CONTENT, LP.WRAP_CONTENT, LP.TYPE_ACCESSIBILITY_OVERLAY,
+                LP.FLAG_NOT_FOCUSABLE or LP.FLAG_NOT_TOUCHABLE, PixelFormat.TRANSLUCENT
+            )
+            lp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            lp.y = dp(120)
+            wm.addView(tv, lp)
+            banner = tv
+            hb.postDelayed({
+                try { wm.removeView(tv) } catch (e: Exception) {}
+                if (banner === tv) banner = null
+            }, 4500)
+        } catch (e: Throwable) {
+            Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onServiceConnected() {
