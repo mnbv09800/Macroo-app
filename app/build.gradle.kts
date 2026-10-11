@@ -19,3 +19,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}
