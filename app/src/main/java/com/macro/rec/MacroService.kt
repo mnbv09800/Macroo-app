@@ -5,9 +5,12 @@ import android.accessibilityservice.AccessibilityService.GestureResultCallback
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.accessibilityservice.GestureDescription
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -22,13 +25,64 @@ import android.view.WindowManager.LayoutParams as LP
 import android.view.accessibility.AccessibilityEvent
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import kotlin.math.abs
 
-// مسار إصبع واحد أثناء التسجيل
-class Rec(val off: Long) {
-    val xs = ArrayList<Float>()
-    val ys = ArrayList<Float>()
-    var end = off
+// أيقونات اللوحة العائمة (1 تشغيل، 2 إيقاف، 3 سحب، 4 كاميرا، 5 عين)
+class Ico(c: Context, private val kind: Int, private val col: Int) : View(c) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    var on = false
+        set(v) {
+            field = v
+            invalidate()
+        }
+
+    override fun onMeasure(w: Int, h: Int) {
+        val s = (46 * resources.displayMetrics.density).toInt()
+        setMeasuredDimension(s, s)
+    }
+
+    override fun onDraw(c: Canvas) {
+        val r = width / 2f
+        p.style = Paint.Style.FILL
+        p.color = if (on) (col and 0x00FFFFFF) or 0x66000000 else 0x22FFFFFF
+        c.drawCircle(r, r, r - 2f, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 3f
+        p.color = col
+        c.drawCircle(r, r, r - 3f, p)
+        p.style = Paint.Style.FILL
+        when (kind) {
+            1 -> {
+                val t = Path()
+                t.moveTo(r * 0.78f, r * 0.6f)
+                t.lineTo(r * 1.46f, r)
+                t.lineTo(r * 0.78f, r * 1.4f)
+                t.close()
+                c.drawPath(t, p)
+            }
+            2 -> c.drawRoundRect(r * 0.66f, r * 0.66f, r * 1.34f, r * 1.34f, 5f, 5f, p)
+            4 -> {
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = 3.5f
+                c.drawRoundRect(r * 0.5f, r * 0.72f, r * 1.5f, r * 1.4f, 8f, 8f, p)
+                c.drawCircle(r, r * 1.06f, r * 0.2f, p)
+            }
+            5 -> {
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = 3.5f
+                c.drawOval(r * 0.45f, r * 0.72f, r * 1.55f, r * 1.28f, p)
+                p.style = Paint.Style.FILL
+                c.drawCircle(r, r, r * 0.17f, p)
+            }
+            else -> {
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = 4f
+                c.drawLine(r * 0.55f, r, r * 1.45f, r, p)
+                c.drawLine(r, r * 0.55f, r, r * 1.45f, p)
+            }
+        }
+    }
 }
 
 class MacroService : AccessibilityService() {
@@ -39,25 +93,22 @@ class MacroService : AccessibilityService() {
     private val h = Handler(Looper.getMainLooper())
     private val steps: ArrayList<Step> get() = Store.macros[Store.cur].steps
     private lateinit var wm: WindowManager
-    private lateinit var shield: View
-    private lateinit var shieldLp: LP
     private lateinit var panel: LinearLayout
     private lateinit var status: TextView
     private lateinit var slotBtn: TextView
-    private lateinit var icRec: Ico
     private lateinit var icPlay: Ico
     var panelOn = false
-    private var recording = false
-    private var playing = false
-    private var lastEnd = 0L
-    private var loopNo = 0
-    private val rec = HashMap<Int, Rec>()
-    private var sess = 0L
-    private val queue = ArrayList<Step>()
-    private var flushing = false
-    private val flushRun = Runnable { flush() }
+    private var bot = false
+    private var phase = 0
+    private var unknown = 0
+    private var waited = 0
+    private var rounds = 0
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun toast(t: String) {
+        Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
+    }
 
     override fun onServiceConnected() {
         inst = this
@@ -75,21 +126,6 @@ class MacroService : AccessibilityService() {
     fun showPanel() {
         if (panelOn) return
         panelOn = true
-
-        // طبقة شفافة تلتقط اللمسات وقت التسجيل
-        shield = View(this)
-        shieldLp = LP(
-            LP.MATCH_PARENT, LP.MATCH_PARENT, LP.TYPE_ACCESSIBILITY_OVERLAY,
-            LP.FLAG_NOT_FOCUSABLE or LP.FLAG_NOT_TOUCHABLE or
-                LP.FLAG_LAYOUT_IN_SCREEN or LP.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        )
-        shield.setOnTouchListener { _, e ->
-            onShield(e)
-            true
-        }
-        wm.addView(shield, shieldLp)
-
         panel = LinearLayout(this)
         panel.gravity = Gravity.CENTER_VERTICAL
         panel.setPadding(dp(8), dp(6), dp(8), dp(6))
@@ -106,8 +142,9 @@ class MacroService : AccessibilityService() {
             return v
         }
         val handle = ico(3, "#FFFFFF") {}
-        icRec = ico(0, "#FB7185") { if (recording) stopAll() else startRec() }
-        icPlay = ico(1, "#4ADE80") { if (playing) stopAll() else startPlay() }
+        ico(4, "#FBBF24") { capture() }
+        ico(5, "#A78BFA") { probe() }
+        icPlay = ico(1, "#4ADE80") { if (bot) stopAll() else botStart() }
         ico(2, "#22D3EE") { stopAll() }
         slotBtn = TextView(this).apply {
             textSize = 14f
@@ -153,18 +190,21 @@ class MacroService : AccessibilityService() {
         panelOn = false
         try {
             wm.removeView(panel)
-            wm.removeView(shield)
         } catch (e: Exception) {
         }
     }
 
-    private fun refresh() {
-        if (!panelOn) return
-        status.text = "${steps.size}"
-        slotBtn.text = Store.macros[Store.cur].name
+    private fun say(t: String) {
+        if (panelOn) status.text = t
     }
 
-    // تبديل الماكرو من اللوحة
+    private fun refresh() {
+        if (!panelOn) return
+        slotBtn.text = Store.macros[Store.cur].name
+        say("${steps.size}")
+    }
+
+    // تبديل ماكرو الهجوم من اللوحة
     private fun nextSlot() {
         stopAll()
         Store.cur = (Store.cur + 1) % Store.macros.size
@@ -172,242 +212,179 @@ class MacroService : AccessibilityService() {
         refresh()
     }
 
-    private fun setTouchable(on: Boolean) {
-        shieldLp.flags = if (on) shieldLp.flags and LP.FLAG_NOT_TOUCHABLE.inv()
-        else shieldLp.flags or LP.FLAG_NOT_TOUCHABLE
-        wm.updateViewLayout(shield, shieldLp)
-    }
-        // ---- التسجيل: نلتقط المسار الكامل لكل إصبع ----
-    private fun pt(r: Rec, x: Float, y: Float) {
-        r.xs.add(x)
-        r.ys.add(y)
-    }
-
-    private fun onShield(e: MotionEvent) {
-        val loc = IntArray(2)
-        shield.getLocationOnScreen(loc)
-        val ox = loc[0].toFloat()
-        val oy = loc[1].toFloat()
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                rec.clear()
-                sess = e.eventTime
-                h.removeCallbacks(flushRun)
-                val r = Rec(0L)
-                pt(r, e.getX(0) + ox, e.getY(0) + oy)
-                rec[e.getPointerId(0)] = r
-            }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                val i = e.actionIndex
-                val r = Rec(e.eventTime - sess)
-                pt(r, e.getX(i) + ox, e.getY(i) + oy)
-                rec[e.getPointerId(i)] = r
-            }
-            MotionEvent.ACTION_MOVE -> {
-                for (n in 0 until e.pointerCount) {
-                    val r = rec[e.getPointerId(n)] ?: continue
-                    for (k in 0 until e.historySize) {
-                        pt(r, e.getHistoricalX(n, k) + ox, e.getHistoricalY(n, k) + oy)
-                    }
-                    pt(r, e.getX(n) + ox, e.getY(n) + oy)
-                    r.end = e.eventTime - sess
-                }
-            }
-            MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP -> {
-                val i = e.actionIndex
-                val r = rec[e.getPointerId(i)]
-                if (r != null) {
-                    pt(r, e.getX(i) + ox, e.getY(i) + oy)
-                    r.end = e.eventTime - sess
-                }
-                if (e.actionMasked == MotionEvent.ACTION_UP) finish(e.eventTime)
-            }
-            MotionEvent.ACTION_CANCEL -> finish(e.eventTime)
-        }
-    }
-
-    // نخفّف النقاط (حد أقصى 40)، وإذا الإصبع ما تحرك نعتبرها ضغطة
-    private fun thin(r: Rec): FloatArray {
-        val n = r.xs.size
-        var move = 0f
-        for (i in 1 until n) move = maxOf(move, abs(r.xs[i] - r.xs[0]), abs(r.ys[i] - r.ys[0]))
-        if (move < 20f) return floatArrayOf(r.xs[0], r.ys[0])
-        val k = minOf(n, 40)
-        val out = FloatArray(k * 2)
-        for (i in 0 until k) {
-            val j = i * (n - 1) / (k - 1)
-            out[i * 2] = r.xs[j]
-            out[i * 2 + 1] = r.ys[j]
-        }
-        return out
-    }
-
-    // انتهت اللمسة (كل الأصابع): نحفظها كخطوة
-    private fun finish(now: Long) {
-        if (rec.isEmpty()) return
-        val list = ArrayList<Stroke>()
-        for (r in rec.values.sortedBy { it.off }.take(GestureDescription.getMaxStrokeCount())) {
-            list.add(
-                Stroke(minOf(r.off, 25000L), minOf(maxOf(r.end - r.off, 40L), 30000L), thin(r))
-            )
-        }
-        val begin = sess
-        rec.clear()
-        val st = Step(list, if (lastEnd == 0L) 0L else begin - lastEnd, false)
-        lastEnd = now
-        steps.add(st)
-        refresh()
-        enqueue(st)
-    }
-
-    // نمرّر اللمسات للعبة بعد ما توقف لحظة (0.3 ثانية) حتى ما تضيع ضغطاتك السريعة
-    private fun enqueue(st: Step) {
-        queue.add(st)
-        if (!flushing) {
-            h.removeCallbacks(flushRun)
-            h.postDelayed(flushRun, 300)
-        }
-    }
-
-    private fun flush() {
-        if (queue.isEmpty() || flushing) return
-        flushing = true
-        shot { a ->
-            if (rec.isNotEmpty()) {
-                // إصبعك نازل هسه، نأجّل
-                flushing = false
-                h.postDelayed(flushRun, 200)
-                return@shot
-            }
-            val only = if (queue.size == 1) queue[0] else null
-            setTouchable(false)
-            if (only != null) learn(only, a)
-            drain(true)
-        }
-    }
-
-    private fun drain(first: Boolean) {
-        if (queue.isEmpty()) {
-            flushing = false
-            if (recording) setTouchable(true)
-            return
-        }
-        val st = queue.removeAt(0)
-        h.postDelayed({ tap(st) { drain(false) } }, if (first) 0L else st.before.coerceIn(0L, 400L))
-    }
-
-    // يتعلم لحاله: إذا الضغطة غيّرت الشاشة بشكل واضح (مثل زر الهجوم) يعلّمها للتحقق
-    private fun learn(st: Step, a: IntArray?) {
-        if (a == null || st.before in 1L..1499L) return
-        val n = steps.size
-        val cur = Store.cur
-        waitChange(a, System.currentTimeMillis() + 3500) { ok ->
-            if (ok && steps.size == n && cur == Store.cur) {
-                st.verify = true
-                Store.save(this)
-            }
-        }
-    }
-
-    private fun startRec() {
-        stopAll()
-        steps.clear()
-        lastEnd = 0L
-        recording = true
-        icRec.on = true
-        shield.setBackgroundColor(0x22FF0000)
-        setTouchable(true)
-        refresh()
-    }
-
     fun stopAll() {
-        if (recording && steps.isNotEmpty()) Store.save(this)
-        recording = false
-        playing = false
-        flushing = false
-        queue.clear()
-        rec.clear()
+        bot = false
         h.removeCallbacksAndMessages(null)
         if (panelOn) {
-            shield.setBackgroundColor(0)
-            setTouchable(false)
-            icRec.on = false
             icPlay.on = false
+            refresh()
         }
     }
-        // ---- التشغيل ----
-    private fun startPlay() {
-        stopAll()
-        if (steps.isEmpty()) return
-        playing = true
-        loopNo = 0
-        icPlay.on = true
-        refresh()
-        h.postDelayed({ if (playing) play(0) }, 1500)
+        // ---- لقطة الشاشة ----
+    private fun grab(cb: (Bitmap?) -> Unit) {
+        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(r: ScreenshotResult) {
+                val hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
+                val sw = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                r.hardwareBuffer.close()
+                cb(sw)
+            }
+            override fun onFailure(errorCode: Int) { cb(null) }
+        })
     }
 
-    // يشغّل الخطوة i ثم اللي بعدها، وبعد آخر خطوة يبدأ دورة جديدة
-    private fun play(i: Int) {
-        val list = steps
-        if (list.isEmpty()) {
-            stopAll()
+    // 📷 نلتقط الشاشة ونفتح المحرر لتحديد الأزرار أو رسم الهجوم
+    private fun capture() {
+        stopAll()
+        grab { b ->
+            if (b == null) {
+                toast("ما قدرت ألتقط الشاشة")
+                return@grab
+            }
+            Shared.shot = b
+            Shared.pending = true
+            toast("انلقطت الشاشة. إذا ما انفتح المحرر افتح تطبيق Macro")
+            try {
+                startActivity(Intent(this, EditorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    // 👁 نختبر شنو الأزرار اللي يشوفها بهالشاشة
+    private fun probe() {
+        grab { b ->
+            if (b == null) {
+                toast("ما قدرت ألتقط الشاشة")
+                return@grab
+            }
+            val hit = Store.anchors.keys.filter { seen(b, it) }
+            toast(if (hit.isEmpty()) "ما شفت أي زر" else "شفت: " + hit.joinToString(" • ") { Store.roleName(it) })
+            b.recycle()
+        }
+    }
+
+    private fun seen(b: Bitmap, role: String): Boolean {
+        val a = Store.anchors[role] ?: return false
+        return Vision.dist(Vision.sig(b, a.x, a.y, a.w, a.h), a.sig) < Store.cfg.match
+    }
+
+    private fun press(role: String) {
+        val a = Store.anchors[role] ?: return
+        val k = Stroke(0L, 60L, floatArrayOf(a.cx.toFloat(), a.cy.toFloat()))
+        tap(Step(arrayListOf(k), 0L, false)) {}
+    }
+
+    // ---- العقل: يفهم الشاشة ويقرر ----
+    private fun botStart() {
+        stopAll()
+        val need = listOf("attack", "find", "next", "home").filter { !Store.anchors.containsKey(it) }
+        if (need.isNotEmpty()) {
+            toast("ناقص: " + need.joinToString(" • ") { Store.roleName(it) })
             return
         }
-        if (i >= list.size) {
-            loopNo++
-            if (Store.cfg.loops in 1..loopNo) {
-                stopAll()
-                return
+        if (steps.isEmpty()) {
+            toast("ارسم الهجوم أول من المحرر (📷 ثم رسم الهجوم)")
+            return
+        }
+        bot = true
+        phase = 0
+        unknown = 0
+        waited = 0
+        rounds = 0
+        icPlay.on = true
+        tick(800)
+    }
+
+    private fun tick(d: Long) {
+        h.postDelayed({ if (bot) look() }, d)
+    }
+
+    private fun look() {
+        grab { b ->
+            if (!bot) {
+                b?.recycle()
+                return@grab
             }
-            h.postDelayed({ if (playing) play(0) }, Store.cfg.loopGap)
+            if (b == null) {
+                tick(1500)
+                return@grab
+            }
+            when {
+                seen(b, "ok") -> {
+                    press("ok")
+                    tick(1500)
+                }
+                seen(b, "home") -> {
+                    phase = 0
+                    unknown = 0
+                    rounds++
+                    say("🏠$rounds")
+                    press("home")
+                    tick(3000)
+                }
+                seen(b, "next") -> {
+                    unknown = 0
+                    say("🔍")
+                    scout()
+                }
+                phase == 1 -> {
+                    waited++
+                    if (waited > 150) {
+                        phase = 0
+                        waited = 0
+                    }
+                    say("⚔")
+                    tick(2500)
+                }
+                seen(b, "find") -> {
+                    unknown = 0
+                    say("🔍")
+                    press("find")
+                    tick(3000)
+                }
+                seen(b, "attack") -> {
+                    unknown = 0
+                    say("🏠")
+                    press("attack")
+                    tick(2500)
+                }
+                else -> {
+                    unknown++
+                    say("؟$unknown")
+                    if (unknown % 40 == 0) performGlobalAction(GLOBAL_ACTION_BACK)
+                    tick(1500)
+                }
+            }
+            b.recycle()
+        }
+    }
+
+    // وصلنا لشاشة البحث: ننفذ خطة الهجوم (المرحلة الجاية: نقرأ الغنائم قبل ما نقرر)
+    private fun scout() {
+        phase = 1
+        waited = 0
+        runPlan(0) { if (bot) tick(3000) }
+    }
+
+    private fun runPlan(i: Int, done: () -> Unit) {
+        val list = steps
+        if (i >= list.size) {
+            done()
             return
         }
         val s = list[i]
         h.postDelayed({
-            if (playing) go(s, 0) { play(i + 1) }
+            if (bot) burst(s, s.repeat) { runPlan(i + 1, done) }
         }, s.before)
-    }
-
-    // ينفذ الخطوة، وإذا كانت معلّمة للتحقق ينتظر تغيّر الشاشة، وإذا ما صار يعيدها
-    private fun go(s: Step, tries: Int, next: () -> Unit) {
-        if (!playing) return
-        if (!s.verify) {
-            burst(s, s.repeat, next)
-            return
-        }
-        shot { a ->
-            burst(s, s.repeat) {
-                if (a == null) next()
-                else waitChange(a, System.currentTimeMillis() + Store.cfg.timeout) { ok ->
-                    when {
-                        !playing -> {}
-                        ok -> next()
-                        tries >= Store.cfg.tries -> { stopAll(); status.text = "❌" }
-                        else -> go(s, tries + 1, next)
-                    }
-                }
-            }
-        }
     }
 
     // تكرار الخطوة n مرة بالفاصل اللي حددته
     private fun burst(s: Step, n: Int, done: () -> Unit) {
         tap(s) {
             if (n <= 1) done()
-            else h.postDelayed({ if (playing) burst(s, n - 1, done) }, s.repGap)
+            else h.postDelayed({ if (bot) burst(s, n - 1, done) }, s.repGap)
         }
-    }
-
-    private fun waitChange(a: IntArray, end: Long, cb: (Boolean) -> Unit) {
-        h.postDelayed({
-            shot { b ->
-                when {
-                    b != null && diff(a, b) > Store.cfg.change -> cb(true)
-                    System.currentTimeMillis() > end -> cb(false)
-                    else -> waitChange(a, end, cb)
-                }
-            }
-        }, 600)
     }
 
     // ننفذ الخطوة: كل إصبع مسار (منحنى أو خط أو نقطة) بنفس توقيته
@@ -434,75 +411,6 @@ class MacroService : AccessibilityService() {
         if (!ok) done()
     }
 
-    // لقطة شاشة مصغّرة (24×48) نقارن بيها قبل وبعد الضغطة
-    private fun shot(cb: (IntArray?) -> Unit) {
-        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-            override fun onSuccess(r: ScreenshotResult) {
-                val hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
-                val sw = hw?.copy(Bitmap.Config.ARGB_8888, false)
-                r.hardwareBuffer.close()
-                if (sw == null) { cb(null); return }
-                val small = Bitmap.createScaledBitmap(sw, 24, 48, true)
-                val px = IntArray(24 * 48)
-                small.getPixels(px, 0, 24, 0, 0, 24, 48)
-                cb(px)
-            }
-            override fun onFailure(errorCode: Int) { cb(null) }
-        })
-    }
-
-    private fun lum(c: Int) = (Color.red(c) * 3 + Color.green(c) * 6 + Color.blue(c)) / 10
-
-    private fun diff(a: IntArray, b: IntArray): Double {
-        var s = 0L
-        for (i in a.indices) s += abs(lum(a[i]) - lum(b[i]))
-        return s.toDouble() / a.size
-    }
-
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
-}
-// أيقونات اللوحة العائمة (0 تسجيل، 1 تشغيل، 2 إيقاف، 3 سحب)
-class Ico(c: android.content.Context, private val kind: Int, private val col: Int) : View(c) {
-    private val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-    var on = false
-        set(v) {
-            field = v
-            invalidate()
-        }
-
-    override fun onMeasure(w: Int, h: Int) {
-        val s = (46 * resources.displayMetrics.density).toInt()
-        setMeasuredDimension(s, s)
-    }
-
-    override fun onDraw(c: android.graphics.Canvas) {
-        val r = width / 2f
-        p.style = android.graphics.Paint.Style.FILL
-        p.color = if (on) (col and 0x00FFFFFF) or 0x66000000 else 0x22FFFFFF
-        c.drawCircle(r, r, r - 2f, p)
-        p.style = android.graphics.Paint.Style.STROKE
-        p.strokeWidth = 3f
-        p.color = col
-        c.drawCircle(r, r, r - 3f, p)
-        p.style = android.graphics.Paint.Style.FILL
-        when (kind) {
-            0 -> c.drawCircle(r, r, r * 0.36f, p)
-            1 -> {
-                val t = Path()
-                t.moveTo(r * 0.78f, r * 0.6f)
-                t.lineTo(r * 1.46f, r)
-                t.lineTo(r * 0.78f, r * 1.4f)
-                t.close()
-                c.drawPath(t, p)
-            }
-            2 -> c.drawRoundRect(r * 0.66f, r * 0.66f, r * 1.34f, r * 1.34f, 5f, 5f, p)
-            else -> {
-                p.style = android.graphics.Paint.Style.STROKE
-                p.strokeWidth = 4f
-                c.drawLine(r * 0.55f, r, r * 1.45f, r, p)
-                c.drawLine(r, r * 0.55f, r, r * 1.45f, p)
-            }
-        }
-    }
 }
