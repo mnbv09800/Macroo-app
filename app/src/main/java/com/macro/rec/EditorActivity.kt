@@ -19,11 +19,15 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.hypot
+import kotlin.math.sqrt
 
 // مسار إصبع واحد أثناء الرسم
 class Rec(val off: Long) {
     val xs = ArrayList<Float>()
     val ys = ArrayList<Float>()
+    val ts = ArrayList<Long>()   // وقت كل نقطة (ms) نسبةً لبداية اللمس
     var end = off
 }
 
@@ -102,6 +106,7 @@ class ShotView(c: Context, private val bmp: Bitmap) : View(c) {
     private fun add(r: Rec, e: MotionEvent, i: Int) {
         r.xs.add(bx(e.getX(i)))
         r.ys.add(by(e.getY(i)))
+        r.ts.add(e.eventTime - sess)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -142,6 +147,7 @@ class ShotView(c: Context, private val bmp: Bitmap) : View(c) {
                     for (k in 0 until e.historySize) {
                         r.xs.add(bx(e.getHistoricalX(n, k)))
                         r.ys.add(by(e.getHistoricalY(n, k)))
+                        r.ts.add(e.getHistoricalEventTime(k) - sess)
                     }
                     add(r, e, n)
                     r.end = e.eventTime - sess
@@ -178,11 +184,106 @@ class ShotView(c: Context, private val bmp: Bitmap) : View(c) {
         return out
     }
 
+    // نبني مسار يحافظ على الثبات (Hold) ثم السحب.
+    // أندرويد يمشي المسار بسرعة ثابتة، فمكان الثبات نعوّضه بهزّة صغيرة جداً بنفس المكان
+    // (تبقى الإصبع "ضاغطة" بنفس الموضع بالوقت اللي ثبّتّه).
+    private fun plan(r: Rec): FloatArray {
+        val n = r.xs.size
+        var move = 0f
+        for (i in 1 until n) move = maxOf(move, abs(r.xs[i] - r.xs[0]), abs(r.ys[i] - r.ys[0]))
+        if (move < 20f || r.ts.size != n) return thin(r)
+
+        // 1) نقاط أساسية: بداية/نهاية + كل نقطة قبل أو بعد وقفة + عيّنة موزعة (حد 60)
+        val keep = BooleanArray(n)
+        keep[0] = true
+        keep[n - 1] = true
+        for (i in 1 until n) {
+            if (r.ts[i] - r.ts[i - 1] >= 40L) {
+                keep[i] = true
+                keep[i - 1] = true
+            }
+        }
+        val m = minOf(n, 60)
+        for (i in 0 until m) keep[i * (n - 1) / maxOf(1, m - 1)] = true
+        val kx = ArrayList<Float>()
+        val ky = ArrayList<Float>()
+        val kt = ArrayList<Long>()
+        for (i in 0 until n) {
+            if (keep[i]) {
+                kx.add(r.xs[i])
+                ky.add(r.ys[i])
+                kt.add(r.ts[i] - r.ts[0])
+            }
+        }
+        val k = kx.size
+        if (k < 2) return thin(r)
+
+        // 2) السرعة المرجعية (px/ms): 85% من سرعات المقاطع المتحركة
+        val sp = ArrayList<Float>()
+        for (i in 1 until k) {
+            val d = hypot(kx[i] - kx[i - 1], ky[i] - ky[i - 1])
+            val dt = maxOf(1L, kt[i] - kt[i - 1])
+            if (d > 6f) sp.add(d / dt)
+        }
+        sp.sort()
+        val v = if (sp.isEmpty()) 0.5f
+        else sp[minOf(sp.size - 1, (sp.size * 0.85f).toInt())].coerceIn(0.2f, 3f)
+
+        // 3) نمشي على المقاطع: البطيئة المتجاورة ندمجها (وقفة)، ونعوّض وقتها بهزّة
+        val out = ArrayList<Float>()
+        out.add(kx[0])
+        out.add(ky[0])
+        var i = 1
+        while (i < k) {
+            val d0 = hypot(kx[i] - kx[i - 1], ky[i] - ky[i - 1])
+            val dt0 = maxOf(1L, kt[i] - kt[i - 1])
+            val slow0 = d0 < 0.4f * v * dt0
+            var j = i
+            if (slow0) {
+                while (j + 1 < k) {
+                    val dd = hypot(kx[j + 1] - kx[j], ky[j + 1] - ky[j])
+                    val tt = maxOf(1L, kt[j + 1] - kt[j])
+                    if (dd < 0.4f * v * tt) j++ else break
+                }
+            }
+            emit(out, kx[i - 1], ky[i - 1], kx[j], ky[j], kt[j] - kt[i - 1], v)
+            i = j + 1
+        }
+        val arr = FloatArray(out.size)
+        for (q in out.indices) arr[q] = out[q]
+        return arr
+    }
+
+    // من (ax,ay) إلى (bx,by) خلال dt ms: إذا أسرع من اللازم نضيف هزّة تضيّع الوقت الزايد
+    private fun emit(out: ArrayList<Float>, ax: Float, ay: Float, ex: Float, ey: Float, dt: Long, v: Float) {
+        val d = hypot(ex - ax, ey - ay)
+        val want = v * maxOf(1L, dt)
+        val pad = want - d
+        if (pad <= 6f) {
+            out.add(ex)
+            out.add(ey)
+            return
+        }
+        val hops = ceil(pad / 8f).toInt().coerceIn(2, 250)
+        val lh = want / hops
+        val fwd = d / hops
+        val lat = sqrt(maxOf(0f, lh * lh - fwd * fwd))
+        val a = minOf(lat / 2f, 20f)
+        val ux = if (d > 1f) -(ey - ay) / d else 1f
+        val uy = if (d > 1f) (ex - ax) / d else 0f
+        for (j in 1..hops) {
+            val f = j.toFloat() / hops
+            val side = if (j == hops) 0f else if (j % 2 == 0) a else -a
+            out.add((ax + (ex - ax) * f + ux * side).coerceIn(0f, bmp.width.toFloat()))
+            out.add((ay + (ey - ay) * f + uy * side).coerceIn(0f, bmp.height.toFloat()))
+        }
+    }
+
     private fun finish(now: Long) {
         if (rec.isEmpty()) return
         val list = ArrayList<Stroke>()
         for (r in rec.values.sortedBy { it.off }.take(10)) {
-            list.add(Stroke(minOf(r.off, 25000L), minOf(maxOf(r.end - r.off, 40L), 30000L), thin(r)))
+            list.add(Stroke(minOf(r.off, 25000L), minOf(maxOf(r.end - r.off, 40L), 30000L), plan(r)))
         }
         val first = Store.macros[Store.cur].steps.isEmpty()
         val gap = if (first) 0L else if (lastEnd == 0L) 500L else sess - lastEnd
