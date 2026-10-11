@@ -385,8 +385,8 @@ class EditorActivity : Activity() {
         if (!draw) {
             for (d in Store.btns) {
                 val k = d.id
-                val on = Store.anchors.containsKey(k)
-                bar.addView(chip((if (on) "✔ " else "") + d.name, k == role) {
+                val cnt = Store.anchors[k]?.size ?: 0
+                bar.addView(chip((if (cnt > 0) "✔ " else "") + d.name + (if (cnt > 1) " ×$cnt" else ""), k == role) {
                     role = k
                     sv.sel = null
                     sv.invalidate()
@@ -401,8 +401,17 @@ class EditorActivity : Activity() {
                     render()
                 })
             }
-            foot.addView(btn("حفظ الزر", GR) { saveAnchor() })
-            foot.addView(btn("مسح صورة الزر", RD) {
+            foot.addView(btn("حفظ الزر (إضافة صورة)", GR) { saveAnchor() })
+            foot.addView(btn("حذف آخر صورة", RD) {
+                val l = Store.anchors[role]
+                if (l != null && l.isNotEmpty()) {
+                    l.removeAt(l.size - 1)
+                    if (l.isEmpty()) Store.anchors.remove(role)
+                }
+                Store.save(this)
+                render()
+            })
+            foot.addView(btn("مسح كل صور الزر", RD) {
                 Store.anchors.remove(role)
                 Store.res.firstOrNull { it.id == role }?.let { it.w = 0 }
                 Store.save(this)
@@ -456,12 +465,17 @@ class EditorActivity : Activity() {
             rs.w = w
             rs.h = h
         } else {
-            Store.anchors[role] = Anchor(role, x, y, w, h, Vision.sig(bmp, x, y, w, h))
+            if ((Store.anchors[role]?.size ?: 0) >= Store.MAX_IMGS) {
+                Toast.makeText(this, "وصلت الحد (${Store.MAX_IMGS} صور). احذف وحدة أول", Toast.LENGTH_LONG).show()
+                return
+            }
+            Store.addAnchor(Anchor(role, x, y, w, h, Vision.sig(bmp, x, y, w, h)))
         }
         Store.save(this)
         sv.sel = null
         sv.invalidate()
-        Toast.makeText(this, "انحفظ ✔", Toast.LENGTH_SHORT).show()
+        val total = Store.anchors[role]?.size ?: 0
+        Toast.makeText(this, if (total > 1) "انحفظ ✔ (صور هذا الزر: $total)" else "انحفظ ✔", Toast.LENGTH_SHORT).show()
         render()
     }
 }
