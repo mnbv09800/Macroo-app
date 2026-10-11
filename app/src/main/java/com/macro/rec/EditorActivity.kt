@@ -204,7 +204,7 @@ class EditorActivity : Activity() {
     private lateinit var bar: LinearLayout
     private lateinit var foot: LinearLayout
     private var draw = false
-    private var role = "attack"
+    private var role = ""
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -218,6 +218,7 @@ class EditorActivity : Activity() {
             return
         }
         Store.ensure(this)
+        if (role.isEmpty()) role = Store.btns.firstOrNull()?.id ?: ""
         requestedOrientation = if (bmp.width > bmp.height) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
         window.statusBarColor = BG
@@ -281,9 +282,10 @@ class EditorActivity : Activity() {
         bar.addView(chip("تحديد زر", !draw) { draw = false; sv.drawMode = false; sv.invalidate(); render() })
         bar.addView(chip("رسم الهجوم", draw) { draw = true; sv.drawMode = true; sv.sel = null; sv.invalidate(); render() })
         if (!draw) {
-            for ((k, label) in Store.roles) {
+            for (d in Store.btns) {
+                val k = d.id
                 val on = Store.anchors.containsKey(k)
-                bar.addView(chip((if (on) "✔ " else "") + label, k == role) {
+                bar.addView(chip((if (on) "✔ " else "") + d.name, k == role) {
                     role = k
                     sv.sel = null
                     sv.invalidate()
@@ -291,7 +293,7 @@ class EditorActivity : Activity() {
                 })
             }
             foot.addView(btn("حفظ الزر", GR) { saveAnchor() })
-            foot.addView(btn("حذف", RD) {
+            foot.addView(btn("مسح صورة الزر", RD) {
                 Store.anchors.remove(role)
                 Store.save(this)
                 render()
@@ -321,6 +323,10 @@ class EditorActivity : Activity() {
     }
 
     private fun saveAnchor() {
+        if (Store.btns.none { it.id == role }) {
+            Toast.makeText(this, "اختر زر من فوق أول", Toast.LENGTH_SHORT).show()
+            return
+        }
         val s = sv.sel
         val bmp = Shared.shot
         if (s == null || bmp == null || s.width() < 8f || s.height() < 8f) {
