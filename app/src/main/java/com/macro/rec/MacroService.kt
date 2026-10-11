@@ -413,13 +413,30 @@ class MacroService : AccessibilityService() {
         }
     }
 
+    // آخر صورة تطابقت لكل زر (نضغط على مكانها)
+    private val matched = HashMap<String, Anchor>()
+
+    // الزر يعتبر "مرئي" إذا أي صورة من صوره تطابق، ونختار الأقرب
     private fun seen(b: Bitmap, role: String): Boolean {
-        val a = Store.anchors[role] ?: return false
-        return Vision.dist(Vision.sig(b, a.x, a.y, a.w, a.h), a.sig) < Store.cfg.match
+        val list = Store.anchors[role] ?: return false
+        var best: Anchor? = null
+        var bd = Double.MAX_VALUE
+        for (a in list) {
+            val d = Vision.dist(Vision.sig(b, a.x, a.y, a.w, a.h), a.sig)
+            if (d < bd) {
+                bd = d
+                best = a
+            }
+        }
+        if (best != null && bd < Store.cfg.match) {
+            matched[role] = best
+            return true
+        }
+        return false
     }
 
     private fun press(role: String) {
-        val a = Store.anchors[role] ?: return
+        val a = matched[role] ?: Store.anchors[role]?.firstOrNull() ?: return
         val k = Stroke(0L, 60L, floatArrayOf(a.cx.toFloat(), a.cy.toFloat()))
         tap(Step(arrayListOf(k), 0L, false)) {}
     }
@@ -435,7 +452,7 @@ class MacroService : AccessibilityService() {
     private fun botStart() {
         stopAll()
         say("▶…")
-        val need = Store.btns.filter { it.kind != 3 && !Store.anchors.containsKey(it.id) }
+        val need = Store.btns.filter { it.kind != 3 && Store.anchors[it.id].isNullOrEmpty() }
         if (need.isNotEmpty()) {
             toast("ناقص: " + need.joinToString(" • ") { it.name })
             return
