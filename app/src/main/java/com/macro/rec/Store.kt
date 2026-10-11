@@ -34,7 +34,8 @@ class Macro(var name: String, val steps: ArrayList<Step> = ArrayList())
 
 class Cfg(
     var timeout: Long = 4000L, var tries: Int = 20, var change: Int = 8,
-    var loopGap: Long = 2000L, var loops: Int = 0, var match: Int = 10
+    var loopGap: Long = 2000L, var loops: Int = 0, var match: Int = 10,
+    var poll: Long = 400L, var repress: Long = 1500L
 )
 
 // زر من اللعبة نتعرف عليه: مكانه وبصمة صورته
@@ -105,6 +106,9 @@ object Store {
         Res("r_elixir", "الإكسير", "💧"),
         Res("r_dark", "الإكسير الأسود", "🖤")
     )
+    // حجم الشاشة اللي انحفظت عليها الإعدادات (نستخدمه لتكبير/تصغير الاستيراد)
+    var refW = 0
+    var refH = 0
     private var ready = false
 
     fun kindName(k: Int): String = kinds.getOrElse(k) { kinds[0] }
@@ -125,7 +129,8 @@ object Store {
         if (!ready) { load(c); ready = true }
     }
 
-    fun save(c: Context) {
+    // كل الإعدادات كـ JSON (للحفظ والتصدير)
+    fun build(): JSONObject {
         val ms = JSONArray()
         for (m in macros) {
             val ss = JSONArray()
@@ -153,11 +158,93 @@ object Store {
         for (r in res) rjs.put(
             JSONObject().put("i", r.id).put("x", r.x).put("y", r.y).put("w", r.w).put("h", r.h).put("m", r.min)
         )
-        val o = JSONObject().put("cur", cur).put("m", ms).put("an", an).put("bt", bt).put("rs", rjs)
+        return JSONObject().put("cur", cur).put("m", ms).put("an", an).put("bt", bt).put("rs", rjs)
             .put("t", cfg.timeout).put("k", cfg.tries).put("c", cfg.change)
             .put("lg", cfg.loopGap).put("lp", cfg.loops).put("mt", cfg.match)
+            .put("pl", cfg.poll).put("rp", cfg.repress)
+            .put("rw", refW).put("rh", refH)
+    }
+
+    fun save(c: Context) {
         c.getSharedPreferences("m4", Context.MODE_PRIVATE).edit()
-            .putString("db", o.toString()).apply()
+            .putString("db", build().toString()).apply()
+    }
+
+    // يقرأ JSON ويملأ كل شي (يرمي استثناء إذا الملف غلط)
+    private fun parse(raw: String) {
+        val o = JSONObject(raw)
+        val ms = o.getJSONArray("m")
+        macros.clear()
+        anchors.clear()
+        btns.clear()
+        for (r in res) { r.x = 0; r.y = 0; r.w = 0; r.h = 0; r.min = 0L }
+        cur = o.optInt("cur", 0)
+        cfg.timeout = o.optLong("t", 4000L)
+        cfg.tries = o.optInt("k", 20)
+        cfg.change = o.optInt("c", 8)
+        cfg.loopGap = o.optLong("lg", 2000L)
+        cfg.loops = o.optInt("lp", 0)
+        cfg.match = o.optInt("mt", 10)
+        cfg.poll = o.optLong("pl", 400L)
+        cfg.repress = o.optLong("rp", 1500L)
+        refW = o.optInt("rw", 0)
+        refH = o.optInt("rh", 0)
+        val bt = o.optJSONArray("bt")
+        if (bt != null) {
+            for (i in 0 until bt.length()) {
+                val q = bt.getJSONObject(i)
+                btns.add(Btn(q.getString("i"), q.getString("n"), q.getInt("k")))
+            }
+        }
+        val rj = o.optJSONArray("rs")
+        if (rj != null) {
+            for (i in 0 until rj.length()) {
+                val q = rj.getJSONObject(i)
+                val r = res.firstOrNull { it.id == q.getString("i") } ?: continue
+                r.x = q.optInt("x")
+                r.y = q.optInt("y")
+                r.w = q.optInt("w")
+                r.h = q.optInt("h")
+                r.min = q.optLong("m", 0L)
+            }
+        }
+        for (i in 0 until ms.length()) {
+            val mo = ms.getJSONObject(i)
+            val m = Macro(mo.getString("n"))
+            val ss = mo.getJSONArray("s")
+            for (j in 0 until ss.length()) {
+                val s = ss.getJSONObject(j)
+                val sk = s.getJSONArray("k")
+                val list = ArrayList<Stroke>()
+                for (q in 0 until sk.length()) {
+                    val ko = sk.getJSONObject(q)
+                    val pts = ko.getString("p").split(",").map { it.toFloat() }.toFloatArray()
+                    list.add(Stroke(ko.getLong("o"), ko.getLong("d"), pts))
+                }
+                if (list.isNotEmpty()) {
+                    m.steps.add(
+                        Step(list, s.getLong("bef"), s.getBoolean("v"), s.getInt("r"), s.getLong("g"))
+                    )
+                }
+            }
+            macros.add(m)
+        }
+        val an = o.optJSONArray("an")
+        if (an != null) {
+            for (i in 0 until an.length()) {
+                val q = an.getJSONObject(i)
+                val sig = q.getString("g").split(",").map { it.toInt() }.toIntArray()
+                anchors[q.getString("r")] = Anchor(
+                    q.getString("r"), q.getInt("x"), q.getInt("y"), q.getInt("w"), q.getInt("h"), sig
+                )
+            }
+        }
+    }
+
+    private fun fix() {
+        if (btns.isEmpty()) defaultBtns()
+        if (macros.isEmpty()) macros.add(Macro("M1"))
+        if (cur !in macros.indices) cur = 0
     }
 
     private fun load(c: Context) {
@@ -167,70 +254,59 @@ object Store {
         val raw = c.getSharedPreferences("m4", Context.MODE_PRIVATE).getString("db", null)
         if (raw != null) {
             try {
-                val o = JSONObject(raw)
-                cur = o.optInt("cur", 0)
-                cfg.timeout = o.optLong("t", 4000L)
-                cfg.tries = o.optInt("k", 20)
-                cfg.change = o.optInt("c", 8)
-                cfg.loopGap = o.optLong("lg", 2000L)
-                cfg.loops = o.optInt("lp", 0)
-                cfg.match = o.optInt("mt", 10)
-                val bt = o.optJSONArray("bt")
-                if (bt != null) {
-                    for (i in 0 until bt.length()) {
-                        val q = bt.getJSONObject(i)
-                        btns.add(Btn(q.getString("i"), q.getString("n"), q.getInt("k")))
-                    }
-                }
-                val rj = o.optJSONArray("rs")
-                if (rj != null) {
-                    for (i in 0 until rj.length()) {
-                        val q = rj.getJSONObject(i)
-                        val r = res.firstOrNull { it.id == q.getString("i") } ?: continue
-                        r.x = q.optInt("x")
-                        r.y = q.optInt("y")
-                        r.w = q.optInt("w")
-                        r.h = q.optInt("h")
-                        r.min = q.optLong("m", 0L)
-                    }
-                }
-                val ms = o.getJSONArray("m")
-                for (i in 0 until ms.length()) {
-                    val mo = ms.getJSONObject(i)
-                    val m = Macro(mo.getString("n"))
-                    val ss = mo.getJSONArray("s")
-                    for (j in 0 until ss.length()) {
-                        val s = ss.getJSONObject(j)
-                        val sk = s.getJSONArray("k")
-                        val list = ArrayList<Stroke>()
-                        for (q in 0 until sk.length()) {
-                            val ko = sk.getJSONObject(q)
-                            val pts = ko.getString("p").split(",").map { it.toFloat() }.toFloatArray()
-                            list.add(Stroke(ko.getLong("o"), ko.getLong("d"), pts))
-                        }
-                        if (list.isNotEmpty()) {
-                            m.steps.add(
-                                Step(list, s.getLong("bef"), s.getBoolean("v"), s.getInt("r"), s.getLong("g"))
-                            )
-                        }
-                    }
-                    macros.add(m)
-                }
-                val an = o.optJSONArray("an")
-                if (an != null) {
-                    for (i in 0 until an.length()) {
-                        val q = an.getJSONObject(i)
-                        val sig = q.getString("g").split(",").map { it.toInt() }.toIntArray()
-                        anchors[q.getString("r")] = Anchor(
-                            q.getString("r"), q.getInt("x"), q.getInt("y"), q.getInt("w"), q.getInt("h"), sig
-                        )
-                    }
-                }
+                parse(raw)
             } catch (e: Exception) {
             }
         }
-        if (btns.isEmpty()) defaultBtns()
-        if (macros.isEmpty()) macros.add(Macro("M1"))
-        if (cur !in macros.indices) cur = 0
+        fix()
+    }
+
+    // تكبير/تصغير الإحداثيات حسب حجم شاشة الجهاز الجديد
+    private fun scale(kx: Float, ky: Float) {
+        for (m in macros) for (s in m.steps) for (k in s.strokes) {
+            for (i in k.pts.indices) k.pts[i] = k.pts[i] * (if (i % 2 == 0) kx else ky)
+        }
+        val old = anchors.values.toList()
+        anchors.clear()
+        for (a in old) anchors[a.role] = Anchor(
+            a.role, (a.x * kx).toInt(), (a.y * ky).toInt(),
+            maxOf(2, (a.w * kx).toInt()), maxOf(2, (a.h * ky).toInt()), a.sig
+        )
+        for (r in res) {
+            r.x = (r.x * kx).toInt()
+            r.y = (r.y * ky).toInt()
+            r.w = (r.w * kx).toInt()
+            r.h = (r.h * ky).toInt()
+        }
+    }
+
+    // استيراد ملف: يستبدل كل شي. يرجع null إذا نجح، أو رسالة الخطأ
+    fun importJson(c: Context, raw: String, screenW: Int, screenH: Int): String? {
+        val old = build().toString()
+        try {
+            parse(raw)
+            if (refW > 0 && refH > 0 && screenW > 0 && screenH > 0) {
+                val long = maxOf(screenW, screenH)
+                val short = minOf(screenW, screenH)
+                val land = refW > refH
+                val nw = if (land) long else short
+                val nh = if (land) short else long
+                val kx = nw.toFloat() / refW
+                val ky = nh.toFloat() / refH
+                if (kx != 1f || ky != 1f) scale(kx, ky)
+                refW = nw
+                refH = nh
+            }
+            fix()
+            save(c)
+            return null
+        } catch (e: Exception) {
+            try {
+                parse(old)
+            } catch (e2: Exception) {
+            }
+            fix()
+            return "الملف غير صالح أو تالف"
+        }
     }
 }
