@@ -4,11 +4,28 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
+// مسار إصبع واحد: off = متى نزل (ms)، dur = كم بقي، pts = نقاط المسار x,y,x,y,...
+class Stroke(var off: Long, var dur: Long, var pts: FloatArray)
+
+// خطوة = لمسة كاملة (إصبع أو أكثر، ضغطة أو سحب أو منحنى)
 class Step(
-    var x1: Float, var y1: Float, var x2: Float, var y2: Float,
-    var dur: Long, var before: Long, var verify: Boolean,
+    val strokes: ArrayList<Stroke>, var before: Long, var verify: Boolean,
     var repeat: Int = 1, var repGap: Long = 150L
-)
+) {
+    val x1: Float get() = strokes[0].pts[0]
+    val y1: Float get() = strokes[0].pts[1]
+    val x2: Float get() = strokes[0].pts[strokes[0].pts.size - 2]
+    val y2: Float get() = strokes[0].pts[strokes[0].pts.size - 1]
+    var dur: Long
+        get() = strokes.maxOf { it.off + it.dur }
+        set(v) {
+            val k = v.toDouble() / dur
+            for (s in strokes) {
+                s.off = (s.off * k).toLong()
+                s.dur = maxOf(1L, (s.dur * k).toLong())
+            }
+        }
+}
 
 class Macro(var name: String, val steps: ArrayList<Step> = ArrayList())
 
@@ -31,25 +48,29 @@ object Store {
         val ms = JSONArray()
         for (m in macros) {
             val ss = JSONArray()
-            for (s in m.steps) ss.put(
-                JSONObject()
-                    .put("a", s.x1.toDouble()).put("b", s.y1.toDouble())
-                    .put("c", s.x2.toDouble()).put("d", s.y2.toDouble())
-                    .put("dur", s.dur).put("bef", s.before).put("v", s.verify)
-                    .put("r", s.repeat).put("g", s.repGap)
-            )
+            for (s in m.steps) {
+                val sk = JSONArray()
+                for (k in s.strokes) sk.put(
+                    JSONObject().put("o", k.off).put("d", k.dur)
+                        .put("p", k.pts.joinToString(",") { it.toInt().toString() })
+                )
+                ss.put(
+                    JSONObject().put("k", sk).put("bef", s.before).put("v", s.verify)
+                        .put("r", s.repeat).put("g", s.repGap)
+                )
+            }
             ms.put(JSONObject().put("n", m.name).put("s", ss))
         }
         val o = JSONObject().put("cur", cur).put("m", ms)
             .put("t", cfg.timeout).put("k", cfg.tries).put("c", cfg.change)
             .put("lg", cfg.loopGap).put("lp", cfg.loops)
-        c.getSharedPreferences("m", Context.MODE_PRIVATE).edit()
+        c.getSharedPreferences("m4", Context.MODE_PRIVATE).edit()
             .putString("db", o.toString()).apply()
     }
 
     private fun load(c: Context) {
         macros.clear()
-        val raw = c.getSharedPreferences("m", Context.MODE_PRIVATE).getString("db", null)
+        val raw = c.getSharedPreferences("m4", Context.MODE_PRIVATE).getString("db", null)
         if (raw != null) {
             try {
                 val o = JSONObject(raw)
@@ -66,14 +87,18 @@ object Store {
                     val ss = mo.getJSONArray("s")
                     for (j in 0 until ss.length()) {
                         val s = ss.getJSONObject(j)
-                        m.steps.add(
-                            Step(
-                                s.getDouble("a").toFloat(), s.getDouble("b").toFloat(),
-                                s.getDouble("c").toFloat(), s.getDouble("d").toFloat(),
-                                s.getLong("dur"), s.getLong("bef"), s.getBoolean("v"),
-                                s.getInt("r"), s.getLong("g")
+                        val sk = s.getJSONArray("k")
+                        val list = ArrayList<Stroke>()
+                        for (q in 0 until sk.length()) {
+                            val ko = sk.getJSONObject(q)
+                            val pts = ko.getString("p").split(",").map { it.toFloat() }.toFloatArray()
+                            list.add(Stroke(ko.getLong("o"), ko.getLong("d"), pts))
+                        }
+                        if (list.isNotEmpty()) {
+                            m.steps.add(
+                                Step(list, s.getLong("bef"), s.getBoolean("v"), s.getInt("r"), s.getLong("g"))
                             )
-                        )
+                        }
                     }
                     macros.add(m)
                 }
