@@ -1,8 +1,11 @@
 package com.macro.rec
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Color
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.abs
 
 // مسار إصبع واحد: off = متى نزل (ms)، dur = كم بقي، pts = نقاط المسار x,y,x,y,...
 class Stroke(var off: Long, var dur: Long, var pts: FloatArray)
@@ -31,14 +34,65 @@ class Macro(var name: String, val steps: ArrayList<Step> = ArrayList())
 
 class Cfg(
     var timeout: Long = 4000L, var tries: Int = 20, var change: Int = 8,
-    var loopGap: Long = 2000L, var loops: Int = 0
+    var loopGap: Long = 2000L, var loops: Int = 0, var match: Int = 10
 )
+
+// زر من اللعبة نتعرف عليه: مكانه وبصمة صورته
+class Anchor(
+    val role: String, val x: Int, val y: Int, val w: Int, val h: Int, val sig: IntArray
+) {
+    val cx: Int get() = x + w / 2
+    val cy: Int get() = y + h / 2
+}
+
+// لقطة الشاشة الأخيرة (تنتقل بين الخدمة والمحرر)
+object Shared {
+    var shot: Bitmap? = null
+    var pending = false
+}
+
+// بصمة منطقة من الصورة (24×16 بالرمادي) ومقارنتها
+object Vision {
+    const val GW = 24
+    const val GH = 16
+
+    fun sig(src: Bitmap, x: Int, y: Int, w: Int, h: Int): IntArray {
+        val x0 = x.coerceIn(0, src.width - 2)
+        val y0 = y.coerceIn(0, src.height - 2)
+        val w0 = w.coerceIn(2, src.width - x0)
+        val h0 = h.coerceIn(2, src.height - y0)
+        val crop = Bitmap.createBitmap(src, x0, y0, w0, h0)
+        val small = Bitmap.createScaledBitmap(crop, GW, GH, true)
+        val px = IntArray(GW * GH)
+        small.getPixels(px, 0, GW, 0, 0, GW, GH)
+        return IntArray(px.size) { i ->
+            val c = px[i]
+            (Color.red(c) * 3 + Color.green(c) * 6 + Color.blue(c)) / 10
+        }
+    }
+
+    fun dist(a: IntArray, b: IntArray): Double {
+        var s = 0L
+        for (i in a.indices) s += abs(a[i] - b[i])
+        return s.toDouble() / a.size
+    }
+}
 
 object Store {
     val macros = ArrayList<Macro>()
     var cur = 0
     val cfg = Cfg()
+    val anchors = HashMap<String, Anchor>()
+    val roles = listOf(
+        "attack" to "زر الهجوم (القرية)",
+        "find" to "زر البحث عن خصم",
+        "next" to "زر Next",
+        "home" to "زر Return Home",
+        "ok" to "زر موافق (اختياري)"
+    )
     private var ready = false
+
+    fun roleName(k: String): String = roles.firstOrNull { it.first == k }?.second ?: k
 
     fun ensure(c: Context) {
         if (!ready) { load(c); ready = true }
@@ -61,15 +115,21 @@ object Store {
             }
             ms.put(JSONObject().put("n", m.name).put("s", ss))
         }
-        val o = JSONObject().put("cur", cur).put("m", ms)
+        val an = JSONArray()
+        for (a in anchors.values) an.put(
+            JSONObject().put("r", a.role).put("x", a.x).put("y", a.y).put("w", a.w).put("h", a.h)
+                .put("g", a.sig.joinToString(","))
+        )
+        val o = JSONObject().put("cur", cur).put("m", ms).put("an", an)
             .put("t", cfg.timeout).put("k", cfg.tries).put("c", cfg.change)
-            .put("lg", cfg.loopGap).put("lp", cfg.loops)
+            .put("lg", cfg.loopGap).put("lp", cfg.loops).put("mt", cfg.match)
         c.getSharedPreferences("m4", Context.MODE_PRIVATE).edit()
             .putString("db", o.toString()).apply()
     }
 
     private fun load(c: Context) {
         macros.clear()
+        anchors.clear()
         val raw = c.getSharedPreferences("m4", Context.MODE_PRIVATE).getString("db", null)
         if (raw != null) {
             try {
@@ -80,6 +140,7 @@ object Store {
                 cfg.change = o.optInt("c", 8)
                 cfg.loopGap = o.optLong("lg", 2000L)
                 cfg.loops = o.optInt("lp", 0)
+                cfg.match = o.optInt("mt", 10)
                 val ms = o.getJSONArray("m")
                 for (i in 0 until ms.length()) {
                     val mo = ms.getJSONObject(i)
@@ -101,6 +162,16 @@ object Store {
                         }
                     }
                     macros.add(m)
+                }
+                val an = o.optJSONArray("an")
+                if (an != null) {
+                    for (i in 0 until an.length()) {
+                        val q = an.getJSONObject(i)
+                        val sig = q.getString("g").split(",").map { it.toInt() }.toIntArray()
+                        anchors[q.getString("r")] = Anchor(
+                            q.getString("r"), q.getInt("x"), q.getInt("y"), q.getInt("w"), q.getInt("h"), sig
+                        )
+                    }
                 }
             } catch (e: Exception) {
             }
