@@ -48,6 +48,12 @@ class Anchor(
 // زر معرّف من المستخدم: id ثابت، اسم، ونوع (0 عادي، 1 بداية الهجوم، 2 نهاية الجولة، 3 موافق)
 class Btn(val id: String, var name: String, var kind: Int)
 
+// منطقة رقم مورد (ذهب/إكسير...) على الشاشة + الحد الأدنى (0 = معطّل)
+class Res(
+    val id: String, val name: String, val icon: String,
+    var x: Int = 0, var y: Int = 0, var w: Int = 0, var h: Int = 0, var min: Long = 0L
+)
+
 // لقطة الشاشة الأخيرة (تنتقل بين الخدمة والمحرر)
 object Shared {
     var shot: Bitmap? = null
@@ -94,6 +100,11 @@ object Store {
         "نهاية الجولة (يرجع للبداية)",
         "موافق / إغلاق (يضغطه بأي وقت)"
     )
+    val res = arrayListOf(
+        Res("r_gold", "الذهب", "💰"),
+        Res("r_elixir", "الإكسير", "💧"),
+        Res("r_dark", "الإكسير الأسود", "🖤")
+    )
     private var ready = false
 
     fun kindName(k: Int): String = kinds.getOrElse(k) { kinds[0] }
@@ -138,7 +149,11 @@ object Store {
         )
         val bt = JSONArray()
         for (d in btns) bt.put(JSONObject().put("i", d.id).put("n", d.name).put("k", d.kind))
-        val o = JSONObject().put("cur", cur).put("m", ms).put("an", an).put("bt", bt)
+        val rjs = JSONArray()
+        for (r in res) rjs.put(
+            JSONObject().put("i", r.id).put("x", r.x).put("y", r.y).put("w", r.w).put("h", r.h).put("m", r.min)
+        )
+        val o = JSONObject().put("cur", cur).put("m", ms).put("an", an).put("bt", bt).put("rs", rjs)
             .put("t", cfg.timeout).put("k", cfg.tries).put("c", cfg.change)
             .put("lg", cfg.loopGap).put("lp", cfg.loops).put("mt", cfg.match)
         c.getSharedPreferences("m4", Context.MODE_PRIVATE).edit()
@@ -165,6 +180,18 @@ object Store {
                     for (i in 0 until bt.length()) {
                         val q = bt.getJSONObject(i)
                         btns.add(Btn(q.getString("i"), q.getString("n"), q.getInt("k")))
+                    }
+                }
+                val rj = o.optJSONArray("rs")
+                if (rj != null) {
+                    for (i in 0 until rj.length()) {
+                        val q = rj.getJSONObject(i)
+                        val r = res.firstOrNull { it.id == q.getString("i") } ?: continue
+                        r.x = q.optInt("x")
+                        r.y = q.optInt("y")
+                        r.w = q.optInt("w")
+                        r.h = q.optInt("h")
+                        r.min = q.optLong("m", 0L)
                     }
                 }
                 val ms = o.getJSONArray("m")
