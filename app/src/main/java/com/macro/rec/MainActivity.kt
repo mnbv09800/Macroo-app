@@ -3,6 +3,7 @@ package com.macro.rec
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.net.Uri
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -249,12 +250,84 @@ class MainActivity : Activity() {
         val c4 = card()
         c4.addView(tv("الإعدادات العامة", 17f, TX, true))
         c4.addView(
-            tv("انتظار التأكد ${cf.timeout / 1000}ث • محاولات ${cf.tries} • دورات $lp", 13f, DIM).apply {
+            tv("سرعة الفحص ${cf.poll}ms • منع التكرار ${cf.repress}ms • دورات $lp", 13f, DIM).apply {
                 setPadding(0, dp(8), 0, 0)
             }
         )
         c4.addView(btn("تعديل", CY) { editCfg() })
         root.addView(c4)
+
+        // تصدير / استيراد
+        val c7 = card()
+        c7.addView(tv("مشاركة الإعدادات", 17f, TX, true))
+        c7.addView(tv("صدّر كل شي (الماكروهات والأزرار والموارد) بملف، وصديقك يستورده بدون ما يرسم من جديد.", 12f, DIM).apply {
+            setPadding(0, dp(6), 0, 0)
+        })
+        val r7 = LinearLayout(this)
+        r7.addView(btn("📤 تصدير", GR) { doExport() })
+        r7.addView(btn("📥 استيراد", CY) { doImport() })
+        c7.addView(r7)
+        root.addView(c7)
+    }
+
+    private fun doExport() {
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "application/json"
+        i.putExtra(Intent.EXTRA_TITLE, "macro-backup.json")
+        try {
+            startActivityForResult(i, 11)
+        } catch (e: Exception) {
+            Toast.makeText(this, "ما كدرت أفتح اختيار الملفات", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun doImport() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "*/*"
+        try {
+            startActivityForResult(i, 12)
+        } catch (e: Exception) {
+            Toast.makeText(this, "ما كدرت أفتح اختيار الملفات", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        val uri: Uri = data?.data ?: return
+        if (res != RESULT_OK) return
+        if (req == 11) {
+            try {
+                contentResolver.openOutputStream(uri)?.use {
+                    it.write(Store.build().toString().toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(this, "انصدّر الملف ✔ ابعثه لصديقك", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "فشل التصدير: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        } else if (req == 12) {
+            val raw = try {
+                contentResolver.openInputStream(uri)?.use { String(it.readBytes(), Charsets.UTF_8) }
+            } catch (e: Exception) {
+                null
+            }
+            if (raw == null) {
+                Toast.makeText(this, "ما كدرت أقرأ الملف", Toast.LENGTH_LONG).show()
+                return
+            }
+            AlertDialog.Builder(this)
+                .setTitle("استيراد")
+                .setMessage("راح يستبدل كل ماكروهاتك وأزرارك وإعداداتك الحالية بالملف. تكمل؟")
+                .setPositiveButton("استيراد") { _, _ ->
+                    val b = windowManager.maximumWindowMetrics.bounds
+                    val err = Store.importJson(this, raw, b.width(), b.height())
+                    Toast.makeText(this, err ?: "تم الاستيراد ✔", Toast.LENGTH_LONG).show()
+                    render()
+                }
+                .setNegativeButton("إلغاء", null).show()
+        }
     }
 
     private fun arrow(t: String, click: () -> Unit) = TextView(this).apply {
@@ -411,6 +484,8 @@ class MainActivity : Activity() {
         val lay = LinearLayout(this)
         lay.orientation = LinearLayout.VERTICAL
         lay.setPadding(dp(20), dp(10), dp(20), 0)
+        val pl = num(lay, "سرعة الفحص (ms) كل ما قلّت صار أسرع (الأدنى 350)", cf.poll)
+        val rp = num(lay, "منع تكرار الضغط على نفس الزر (ms)", cf.repress)
         val t = num(lay, "انتظار تغيّر الشاشة بعد الضغطة (ثانية)", cf.timeout / 1000)
         val k = num(lay, "أقصى عدد محاولات إعادة الضغط", cf.tries.toLong())
         val c = num(lay, "حساسية تغيّر الشاشة (قلّلها = أحسس)", cf.change.toLong())
@@ -420,6 +495,8 @@ class MainActivity : Activity() {
         scroll.addView(lay)
         AlertDialog.Builder(this).setTitle("الإعدادات العامة").setView(scroll)
             .setPositiveButton("حفظ") { _, _ ->
+                cf.poll = (pl.text.toString().toLongOrNull() ?: 400L).coerceIn(350L, 5000L)
+                cf.repress = (rp.text.toString().toLongOrNull() ?: 1500L).coerceIn(300L, 10000L)
                 cf.timeout = (t.text.toString().toLongOrNull() ?: 4L).coerceIn(1L, 60L) * 1000
                 cf.tries = (k.text.toString().toIntOrNull() ?: 20).coerceIn(1, 200)
                 cf.change = (c.text.toString().toIntOrNull() ?: 8).coerceIn(1, 100)
