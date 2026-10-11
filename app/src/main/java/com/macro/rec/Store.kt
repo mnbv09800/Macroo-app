@@ -92,7 +92,13 @@ object Store {
     val macros = ArrayList<Macro>()
     var cur = 0
     val cfg = Cfg()
-    val anchors = HashMap<String, Anchor>()
+    // كل زر ممكن يكون له أكثر من صورة (حتى يتعرف عليه بكل الظروف)
+    val anchors = HashMap<String, ArrayList<Anchor>>()
+    const val MAX_IMGS = 8
+
+    fun addAnchor(a: Anchor) {
+        anchors.getOrPut(a.role) { ArrayList() }.add(a)
+    }
     // الأزرار بالترتيب (البوت يفحصها من فوق لتحت)
     val btns = ArrayList<Btn>()
     val kinds = listOf(
@@ -148,7 +154,7 @@ object Store {
             ms.put(JSONObject().put("n", m.name).put("s", ss))
         }
         val an = JSONArray()
-        for (a in anchors.values) an.put(
+        for (a in anchors.values.flatten()) an.put(
             JSONObject().put("r", a.role).put("x", a.x).put("y", a.y).put("w", a.w).put("h", a.h)
                 .put("g", a.sig.joinToString(","))
         )
@@ -234,8 +240,10 @@ object Store {
             for (i in 0 until an.length()) {
                 val q = an.getJSONObject(i)
                 val sig = q.getString("g").split(",").map { it.toInt() }.toIntArray()
-                anchors[q.getString("r")] = Anchor(
-                    q.getString("r"), q.getInt("x"), q.getInt("y"), q.getInt("w"), q.getInt("h"), sig
+                addAnchor(
+                    Anchor(
+                        q.getString("r"), q.getInt("x"), q.getInt("y"), q.getInt("w"), q.getInt("h"), sig
+                    )
                 )
             }
         }
@@ -266,11 +274,13 @@ object Store {
         for (m in macros) for (s in m.steps) for (k in s.strokes) {
             for (i in k.pts.indices) k.pts[i] = k.pts[i] * (if (i % 2 == 0) kx else ky)
         }
-        val old = anchors.values.toList()
+        val old = anchors.values.flatten()
         anchors.clear()
-        for (a in old) anchors[a.role] = Anchor(
-            a.role, (a.x * kx).toInt(), (a.y * ky).toInt(),
-            maxOf(2, (a.w * kx).toInt()), maxOf(2, (a.h * ky).toInt()), a.sig
+        for (a in old) addAnchor(
+            Anchor(
+                a.role, (a.x * kx).toInt(), (a.y * ky).toInt(),
+                maxOf(2, (a.w * kx).toInt()), maxOf(2, (a.h * ky).toInt()), a.sig
+            )
         )
         for (r in res) {
             r.x = (r.x * kx).toInt()
