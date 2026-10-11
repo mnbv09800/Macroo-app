@@ -45,9 +45,13 @@ class MainActivity : Activity() {
         setContentView(sv)
     }
 
-    override fun onResume() {
+        override fun onResume() {
         super.onResume()
         MacroService.inst?.stopAll()
+        if (Shared.pending) {
+            Shared.pending = false
+            startActivity(Intent(this, EditorActivity::class.java))
+        }
         render()
     }
 
