@@ -16,6 +16,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
@@ -32,8 +33,13 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlin.math.abs
 
 // أيقونات اللوحة العائمة (1 تشغيل، 2 إيقاف، 3 سحب، 4 كاميرا، 5 عين)
-class Ico(c: Context, private val kind: Int, private val col: Int) : View(c) {
+class Ico(c: Context, kind0: Int, private val col: Int) : View(c) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    var kind = kind0
+        set(v) {
+            field = v
+            invalidate()
+        }
     var on = false
         set(v) {
             field = v
@@ -71,6 +77,16 @@ class Ico(c: Context, private val kind: Int, private val col: Int) : View(c) {
                 c.drawRoundRect(r * 0.5f, r * 0.72f, r * 1.5f, r * 1.4f, 8f, 8f, p)
                 c.drawCircle(r, r * 1.06f, r * 0.2f, p)
             }
+            6, 7 -> {
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = 5f
+                p.strokeCap = Paint.Cap.ROUND
+                val a = if (kind == 6) r * 1.15f else r * 0.85f
+                val m = if (kind == 6) r * 0.8f else r * 1.2f
+                c.drawLine(a, r * 0.6f, m, r, p)
+                c.drawLine(m, r, a, r * 1.4f, p)
+                p.strokeCap = Paint.Cap.BUTT
+            }
             5 -> {
                 p.style = Paint.Style.STROKE
                 p.strokeWidth = 3.5f
@@ -101,6 +117,7 @@ class MacroService : AccessibilityService() {
     private lateinit var slotBtn: TextView
     private lateinit var icPlay: Ico
     var panelOn = false
+    private var panelLp: LP? = null
     private var bot = false
     private var phase = 0
     private var unknown = 0
@@ -108,6 +125,8 @@ class MacroService : AccessibilityService() {
     private var rounds = 0
     private var skips = 0
     private var readFails = 0
+    private var lastId = ""
+    private var lastAt = 0L
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -186,23 +205,37 @@ class MacroService : AccessibilityService() {
             return v
         }
         val handle = ico(3, "#FFFFFF") {}
-        ico(4, "#FBBF24") { capture() }
-        ico(5, "#A78BFA") { probe() }
+        val rest = ArrayList<View>()
+        var open = true
+        lateinit var tg: Ico
+        tg = ico(6, "#FFFFFF") {
+            open = !open
+            for (v in rest) v.visibility = if (open) View.VISIBLE else View.GONE
+            tg.kind = if (open) 6 else 7
+        }
+        rest.add(ico(4, "#FBBF24") { capture() })
+        rest.add(ico(5, "#A78BFA") { probe() })
         icPlay = ico(1, "#4ADE80") { if (bot) stopAll() else botStart() }
-        ico(2, "#22D3EE") { stopAll() }
+        rest.add(icPlay)
+        rest.add(ico(2, "#22D3EE") { stopAll() })
         slotBtn = TextView(this).apply {
+            isSingleLine = true
             textSize = 14f
             setTextColor(Color.parseColor("#22D3EE"))
             setPadding(dp(10), 0, dp(6), 0)
             setOnClickListener { nextSlot() }
         }
         status = TextView(this).apply {
+            isSingleLine = true
+            setHorizontallyScrolling(true)
             textSize = 14f
             setTextColor(Color.WHITE)
             setPadding(dp(4), 0, dp(10), 0)
         }
         panel.addView(slotBtn)
         panel.addView(status)
+        rest.add(slotBtn)
+        rest.add(status)
 
         val lp = LP(
             LP.WRAP_CONTENT, LP.WRAP_CONTENT, LP.TYPE_ACCESSIBILITY_OVERLAY,
@@ -211,6 +244,7 @@ class MacroService : AccessibilityService() {
         lp.gravity = Gravity.TOP or Gravity.START
         lp.x = 20
         lp.y = 120
+        panelLp = lp
         var ox = 0f
         var oy = 0f
         handle.setOnTouchListener { _, e ->
@@ -239,7 +273,17 @@ class MacroService : AccessibilityService() {
     }
 
     private fun say(t: String) {
-        if (panelOn) status.text = t
+        if (!panelOn) return
+        if (status.text.toString() == t) return
+        status.text = t
+        val lp = panelLp ?: return
+        // نخلي النافذة تعيد حساب حجمها (حتى ما ينلف النص بعدة أسطر)
+        panel.post {
+            try {
+                if (panelOn) wm.updateViewLayout(panel, lp)
+            } catch (e: Exception) {
+            }
+        }
     }
 
     private fun refresh() {
@@ -304,6 +348,9 @@ class MacroService : AccessibilityService() {
             }
             Shared.shot = b
             Shared.pending = true
+            Store.refW = b.width
+            Store.refH = b.height
+            Store.save(this)
             toast("انلقطت الشاشة. إذا ما انفتح المحرر افتح تطبيق Macro")
             try {
                 startActivity(Intent(this, EditorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -377,6 +424,13 @@ class MacroService : AccessibilityService() {
         tap(Step(arrayListOf(k), 0L, false)) {}
     }
 
+    // نضغط ونسجل آخر زر انضغط (حتى ما نكرر الضغط على نفس الزر قبل ما الشاشة تتغير)
+    private fun pressRec(id: String) {
+        lastId = id
+        lastAt = SystemClock.uptimeMillis()
+        press(id)
+    }
+
     // ---- العقل: يفهم الشاشة ويقرر ----
     private fun botStart() {
         stopAll()
@@ -410,8 +464,10 @@ class MacroService : AccessibilityService() {
         rounds = 0
         skips = 0
         readFails = 0
+        lastId = ""
+        lastAt = 0L
         icPlay.on = true
-        tick(800)
+        tick(200)
     }
 
     private fun tick(d: Long) {
@@ -425,7 +481,7 @@ class MacroService : AccessibilityService() {
                 return@grab
             }
             if (b == null) {
-                tick(1500)
+                tick(maxOf(Store.cfg.poll, 500L))
                 return@grab
             }
             // أزرار "موافق" أول شي، وبعدها الباقي حسب ترتيبك
@@ -438,39 +494,44 @@ class MacroService : AccessibilityService() {
                 }
             }
             val d = hit
+            val poll = Store.cfg.poll
             if (d == null) {
                 if (phase == 1) {
+                    val bt = maxOf(poll, 800L)
                     waited++
-                    if (waited > 150) {
+                    if (waited > (375000L / bt).toInt()) {
                         phase = 0
                         waited = 0
                     }
                     say("⚔")
-                    tick(2500)
+                    tick(bt)
                 } else {
                     unknown++
                     say("؟$unknown")
-                    if (unknown % 40 == 0) performGlobalAction(GLOBAL_ACTION_BACK)
-                    tick(1500)
+                    if (unknown % maxOf(40, (60000L / poll).toInt()) == 0) performGlobalAction(GLOBAL_ACTION_BACK)
+                    tick(poll)
                 }
+            } else if (d.id == lastId && SystemClock.uptimeMillis() - lastAt < Store.cfg.repress) {
+                // نفس الزر انضغط قبل شوي: ننتظر الشاشة تتغير بدل ما نكرر الضغط
+                tick(poll)
             } else {
                 when (d.kind) {
                     3 -> {
-                        press(d.id)
-                        tick(1500)
+                        pressRec(d.id)
+                        tick(poll)
                     }
                     2 -> {
                         phase = 0
                         unknown = 0
                         rounds++
                         say("🏠$rounds")
-                        press(d.id)
+                        pressRec(d.id)
                         val lim = Store.cfg.loops
                         if (lim > 0 && rounds >= lim) {
                             toast("خلصت $rounds دورة")
                             h.postDelayed({ stopAll() }, 1500)
                         } else {
-                            tick(maxOf(3000L, Store.cfg.loopGap))
+                            tick(maxOf(poll, Store.cfg.loopGap))
                         }
                     }
                     1 -> {
@@ -478,6 +539,7 @@ class MacroService : AccessibilityService() {
                         val on = Store.res.filter { it.min > 0 && it.w > 0 }
                         if (on.isEmpty()) {
                             say("🔍")
+                            lastId = ""
                             scout()
                         } else {
                             readAll(b, on) { vals ->
@@ -496,12 +558,13 @@ class MacroService : AccessibilityService() {
                                 val pass = on.indices.all { (vals[it] ?: -1L) >= on[it].min }
                                 if (pass) {
                                     say("✅ $txt")
+                                    lastId = ""
                                     scout()
                                 } else {
                                     skips++
                                     say("⏭$skips $txt")
-                                    press(d.id)
-                                    tick(2500)
+                                    pressRec(d.id)
+                                    tick(poll)
                                 }
                             }
                         }
@@ -509,8 +572,8 @@ class MacroService : AccessibilityService() {
                     else -> {
                         unknown = 0
                         say("▶")
-                        press(d.id)
-                        tick(3000)
+                        pressRec(d.id)
+                        tick(poll)
                     }
                 }
             }
@@ -522,7 +585,7 @@ class MacroService : AccessibilityService() {
     private fun scout() {
         phase = 1
         waited = 0
-        runPlan(0) { if (bot) tick(3000) }
+        runPlan(0) { if (bot) tick(Store.cfg.poll) }
     }
 
     private fun runPlan(i: Int, done: () -> Unit) {
