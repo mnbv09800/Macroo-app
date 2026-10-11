@@ -142,7 +142,13 @@ class MacroService : AccessibilityService() {
         fun ico(kind: Int, col: String, click: () -> Unit): Ico {
             val v = Ico(this, kind, Color.parseColor(col))
             v.layoutParams = LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(3), 0, dp(3), 0) }
-            v.setOnClickListener { click() }
+            v.setOnClickListener {
+                try {
+                    click()
+                } catch (e: Throwable) {
+                    toast("خطأ: ${e.javaClass.simpleName} ${e.message ?: ""}")
+                }
+            }
             panel.addView(v)
             return v
         }
@@ -227,16 +233,32 @@ class MacroService : AccessibilityService() {
     }
 
     // ---- لقطة الشاشة ----
+    private var lastErr = 0
+
     private fun grab(cb: (Bitmap?) -> Unit) {
-        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-            override fun onSuccess(r: ScreenshotResult) {
-                val hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
-                val sw = hw?.copy(Bitmap.Config.ARGB_8888, false)
-                r.hardwareBuffer.close()
-                cb(sw)
-            }
-            override fun onFailure(errorCode: Int) { cb(null) }
-        })
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(r: ScreenshotResult) {
+                    var sw: Bitmap? = null
+                    try {
+                        val hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
+                        sw = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                    } catch (e: Throwable) {
+                        toast("خطأ لقطة: ${e.message}")
+                    } finally {
+                        try { r.hardwareBuffer.close() } catch (e: Throwable) {}
+                    }
+                    cb(sw)
+                }
+                override fun onFailure(errorCode: Int) {
+                    lastErr = errorCode
+                    cb(null)
+                }
+            })
+        } catch (e: Throwable) {
+            toast("خطأ لقطة: ${e.message}")
+            cb(null)
+        }
     }
 
     // 📷 نلتقط الشاشة ونفتح المحرر لتحديد الأزرار أو رسم الهجوم
@@ -259,9 +281,11 @@ class MacroService : AccessibilityService() {
 
     // 👁 نختبر شنو الأزرار اللي يشوفها بهالشاشة
     private fun probe() {
+        say("👁…")
         grab { b ->
             if (b == null) {
-                toast("ما قدرت ألتقط الشاشة")
+                toast("ما قدرت ألتقط الشاشة (كود $lastErr). جرّب مرة ثانية بعد ثانيتين")
+                refresh()
                 return@grab
             }
             val hit = Store.anchors.keys.filter { seen(b, it) }
@@ -323,6 +347,7 @@ class MacroService : AccessibilityService() {
     // ---- العقل: يفهم الشاشة ويقرر ----
     private fun botStart() {
         stopAll()
+        say("▶…")
         val need = Store.btns.filter { it.kind != 3 && !Store.anchors.containsKey(it.id) }
         if (need.isNotEmpty()) {
             toast("ناقص: " + need.joinToString(" • ") { it.name })
@@ -407,7 +432,13 @@ class MacroService : AccessibilityService() {
                         rounds++
                         say("🏠$rounds")
                         press(d.id)
-                        tick(3000)
+                        val lim = Store.cfg.loops
+                        if (lim > 0 && rounds >= lim) {
+                            toast("خلصت $rounds دورة")
+                            h.postDelayed({ stopAll() }, 1500)
+                        } else {
+                            tick(maxOf(3000L, Store.cfg.loopGap))
+                        }
                     }
                     1 -> {
                         unknown = 0
