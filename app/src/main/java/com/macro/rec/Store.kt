@@ -191,6 +191,32 @@ object Store {
         else -> 2
     }
 
+    // نسخة كاملة مستقلة من ماكرو (كل الخطوات والمسارات) بدون ما نعيد الرسم من الصفر
+    fun copyMacro(src: Macro, name: String): Macro {
+        val m = Macro(name)
+        for (s in src.steps) {
+            val ks = ArrayList<Stroke>()
+            for (k in s.strokes) ks.add(Stroke(k.off, k.dur, k.pts.copyOf()))
+            m.steps.add(Step(ks, s.before, s.verify, s.repeat, s.repGap))
+        }
+        return m
+    }
+
+    // ينشئ n نسخة بأسماء "الاسم (2)", "الاسم (3)"... ويرجع عدد النسخ
+    fun duplicate(src: Macro, n: Int): Int {
+        val base = src.name.replace(Regex("\\s*\\(\\d+\\)$"), "")
+        var made = 0
+        var k = 2
+        while (made < n) {
+            val nm = "$base ($k)"
+            k++
+            if (macros.any { it.name == nm }) continue
+            macros.add(copyMacro(src, nm))
+            made++
+        }
+        return made
+    }
+
     fun kindName(k: Int): String = kinds.getOrElse(k) { kinds[0] }
 
     fun roleName(k: String): String = btns.firstOrNull { it.id == k }?.name ?: k
