@@ -81,6 +81,67 @@ object Vision {
         }
     }
 
+    // نسبة امتلاء شريط المورد (0..100) من لونه. kind: 0 ذهب (أصفر)، 1 إكسير (بنفسجي)، 2 أسود (غامق)
+    // نصنّف كل عمود: تعبئة أو فارغ أو "نص" (الأرقام فوق الشريط)، والنص ياخذ حكم جيرانه
+    fun fillPct(src: Bitmap, x: Int, y: Int, w: Int, h: Int, kind: Int): Int {
+        val x0 = x.coerceIn(0, src.width - 2)
+        val y0 = y.coerceIn(0, src.height - 2)
+        val w0 = w.coerceIn(2, src.width - x0)
+        val h0 = h.coerceIn(2, src.height - y0)
+        val px = IntArray(w0 * h0)
+        src.getPixels(px, 0, w0, x0, y0, w0, h0)
+        val hsv = FloatArray(3)
+        val ya = (h0 * 0.1f).toInt()
+        val yb = maxOf(ya + 1, (h0 * 0.9f).toInt())
+        val n = yb - ya
+        val st = IntArray(w0)   // 1 تعبئة، 0 فارغ، -1 نص
+        for (cx in 0 until w0) {
+            var f = 0
+            var t = 0
+            for (cy in ya until yb) {
+                Color.colorToHSV(px[cy * w0 + cx], hsv)
+                val hh = hsv[0]
+                val sa = hsv[1]
+                val va = hsv[2]
+                val ok = when (kind) {
+                    0 -> hh in 38f..62f && sa > 0.4f && va > 0.35f
+                    1 -> hh in 265f..325f && sa > 0.3f && va > 0.3f
+                    else -> va < 0.33f
+                }
+                if (ok) {
+                    f++
+                } else if (kind != 2 && ((sa < 0.2f && va > 0.8f) || va < 0.25f)) {
+                    t++
+                }
+            }
+            st[cx] = if (f >= 1) 1 else if (t * 100 >= n * 60) -1 else 0
+        }
+        var i = 0
+        while (i < w0) {
+            if (st[i] == -1) {
+                var j = i
+                while (j < w0 && st[j] == -1) j++
+                val a = if (i > 0) st[i - 1] else -2
+                val b = if (j < w0) st[j] else -2
+                for (q in i until j) {
+                    st[q] = when {
+                        a == -2 && b == -2 -> 0
+                        a == -2 -> b
+                        b == -2 -> a
+                        a == b -> a
+                        else -> if (q - i < (j - i) / 2) a else b
+                    }
+                }
+                i = j
+            } else {
+                i++
+            }
+        }
+        var cols = 0
+        for (q in 0 until w0) if (st[q] == 1) cols++
+        return cols * 100 / w0
+    }
+
     fun dist(a: IntArray, b: IntArray): Double {
         var s = 0L
         for (i in a.indices) s += abs(a[i] - b[i])
@@ -112,10 +173,23 @@ object Store {
         Res("r_elixir", "الإكسير", "💧"),
         Res("r_dark", "الإكسير الأسود", "🖤")
     )
+    // مخزنك أنت (ذهب/إكسير/أسود): لما يوصل الحد اللي تحدده البوت يوقف
+    val own = arrayListOf(
+        Res("o_gold", "مخزنك: الذهب", "💰"),
+        Res("o_elixir", "مخزنك: الإكسير", "💧"),
+        Res("o_dark", "مخزنك: الأسود", "🖤")
+    )
     // حجم الشاشة اللي انحفظت عليها الإعدادات (نستخدمه لتكبير/تصغير الاستيراد)
     var refW = 0
     var refH = 0
     private var ready = false
+
+    // نوع شريط المورد حسب الـid
+    fun fillKind(id: String): Int = when (id) {
+        "o_gold" -> 0
+        "o_elixir" -> 1
+        else -> 2
+    }
 
     fun kindName(k: Int): String = kinds.getOrElse(k) { kinds[0] }
 
@@ -161,7 +235,7 @@ object Store {
         val bt = JSONArray()
         for (d in btns) bt.put(JSONObject().put("i", d.id).put("n", d.name).put("k", d.kind))
         val rjs = JSONArray()
-        for (r in res) rjs.put(
+        for (r in res + own) rjs.put(
             JSONObject().put("i", r.id).put("x", r.x).put("y", r.y).put("w", r.w).put("h", r.h).put("m", r.min)
         )
         return JSONObject().put("cur", cur).put("m", ms).put("an", an).put("bt", bt).put("rs", rjs)
@@ -183,7 +257,7 @@ object Store {
         macros.clear()
         anchors.clear()
         btns.clear()
-        for (r in res) { r.x = 0; r.y = 0; r.w = 0; r.h = 0; r.min = 0L }
+        for (r in res + own) { r.x = 0; r.y = 0; r.w = 0; r.h = 0; r.min = 0L }
         cur = o.optInt("cur", 0)
         cfg.timeout = o.optLong("t", 4000L)
         cfg.tries = o.optInt("k", 20)
@@ -206,7 +280,7 @@ object Store {
         if (rj != null) {
             for (i in 0 until rj.length()) {
                 val q = rj.getJSONObject(i)
-                val r = res.firstOrNull { it.id == q.getString("i") } ?: continue
+                val r = (res + own).firstOrNull { it.id == q.getString("i") } ?: continue
                 r.x = q.optInt("x")
                 r.y = q.optInt("y")
                 r.w = q.optInt("w")
@@ -282,7 +356,7 @@ object Store {
                 maxOf(2, (a.w * kx).toInt()), maxOf(2, (a.h * ky).toInt()), a.sig
             )
         )
-        for (r in res) {
+        for (r in res + own) {
             r.x = (r.x * kx).toInt()
             r.y = (r.y * ky).toInt()
             r.w = (r.w * kx).toInt()
