@@ -125,6 +125,7 @@ class MacroService : AccessibilityService() {
     private var rounds = 0
     private var skips = 0
     private var readFails = 0
+    private var fullHits = 0
     private var lastId = ""
     private var lastAt = 0L
 
@@ -371,11 +372,15 @@ class MacroService : AccessibilityService() {
             val hit = Store.anchors.keys.filter { seen(b, it) }
             val msg = if (hit.isEmpty()) "ما شفت أي زر" else "شفت: " + hit.joinToString(" • ") { Store.roleName(it) }
             val on = Store.res.filter { it.w > 0 }
+            val ownTxt = Store.own.filter { it.w > 0 }.joinToString(" • ") {
+                "${it.icon} ${Vision.fillPct(b, it.x, it.y, it.w, it.h, Store.fillKind(it.id))}%"
+            }
+            val msg0 = msg + (if (ownTxt.isEmpty()) "" else "\n$ownTxt")
             if (on.isEmpty()) {
-                toast(msg)
+                toast(msg0)
             } else {
                 readAll(b, on) { vals ->
-                    toast(msg + "\n" + on.indices.joinToString(" • ") { "${on[it].icon} ${vals[it] ?: "؟"}" })
+                    toast(msg0 + "\n" + on.indices.joinToString(" • ") { "${on[it].icon} ${vals[it] ?: "؟"}" })
                 }
             }
             b.recycle()
@@ -469,7 +474,7 @@ class MacroService : AccessibilityService() {
             toast("ارسم الهجوم أول من المحرر (📷 ثم رسم الهجوم)")
             return
         }
-        val noReg = Store.res.filter { it.min > 0 && it.w <= 0 }
+        val noReg = (Store.res + Store.own).filter { it.min > 0 && it.w <= 0 }
         if (noReg.isNotEmpty()) {
             toast("حدد منطقة الرقم لـ: " + noReg.joinToString(" • ") { it.name })
             return
@@ -481,6 +486,7 @@ class MacroService : AccessibilityService() {
         rounds = 0
         skips = 0
         readFails = 0
+        fullHits = 0
         lastId = ""
         lastAt = 0L
         icPlay.on = true
@@ -554,34 +560,54 @@ class MacroService : AccessibilityService() {
                     1 -> {
                         unknown = 0
                         val on = Store.res.filter { it.min > 0 && it.w > 0 }
-                        if (on.isEmpty()) {
-                            say("🔍")
-                            lastId = ""
-                            scout()
+                        val own = Store.own.filter { it.min > 0 && it.w > 0 }
+                        // مخزنك: نقيس نسبة امتلاء الشريط من لونه (مو من الرقم)
+                        val pct = own.map { Vision.fillPct(b, it.x, it.y, it.w, it.h, Store.fillKind(it.id)) }
+                        val fi = own.indices.firstOrNull { pct[it] >= own[it].min }
+                        if (fi != null) {
+                            // لازم يتكرر مرتين متتاليتين حتى ما يخدعنا خطأ بالقراءة
+                            fullHits++
+                            if (fullHits >= 2) {
+                                val nm = own[fi].name
+                                val pv = pct[fi]
+                                stopAll()
+                                toast("✅ $nm وصل $pv%، وقفت اللعب")
+                            } else {
+                                say("📦 تأكد…")
+                                tick(poll)
+                            }
                         } else {
-                            readAll(b, on) { vals ->
-                                if (!bot) return@readAll
-                                val txt = on.indices.joinToString(" ") { "${on[it].icon}${vals[it] ?: "؟"}" }
-                                if (vals.any { it == null }) {
-                                    readFails++
-                                    if (readFails >= 5) {
-                                        stopAll()
-                                        toast("ما كدرت أقرأ الأرقام. تأكد من المستطيل (جرّب 👁)")
-                                        return@readAll
+                            fullHits = 0
+                            val ptxt = own.indices.joinToString(" ") { "${own[it].icon}${pct[it]}%" }
+                            if (on.isEmpty()) {
+                                say(if (own.isEmpty()) "🔍" else "🔍 $ptxt")
+                                lastId = ""
+                                scout()
+                            } else {
+                                readAll(b, on) { vals ->
+                                    if (!bot) return@readAll
+                                    val txt = on.indices.joinToString(" ") { "${on[it].icon}${vals[it] ?: "؟"}" }
+                                    if (vals.any { it == null }) {
+                                        readFails++
+                                        if (readFails >= 5) {
+                                            stopAll()
+                                            toast("ما كدرت أقرأ الأرقام. تأكد من المستطيل (جرّب 👁)")
+                                            return@readAll
+                                        }
+                                    } else {
+                                        readFails = 0
                                     }
-                                } else {
-                                    readFails = 0
-                                }
-                                val pass = on.indices.all { (vals[it] ?: -1L) >= on[it].min }
-                                if (pass) {
-                                    say("✅ $txt")
-                                    lastId = ""
-                                    scout()
-                                } else {
-                                    skips++
-                                    say("⏭$skips $txt")
-                                    pressRec(d.id)
-                                    tick(poll)
+                                    val pass = on.indices.all { (vals[it] ?: -1L) >= on[it].min }
+                                    if (pass) {
+                                        say("✅ $txt")
+                                        lastId = ""
+                                        scout()
+                                    } else {
+                                        skips++
+                                        say("⏭$skips $txt")
+                                        pressRec(d.id)
+                                        tick(poll)
+                                    }
                                 }
                             }
                         }
