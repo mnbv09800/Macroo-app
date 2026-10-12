@@ -162,6 +162,20 @@ class MainActivity : Activity() {
             Store.save(this)
             render()
         })
+        acts.addView(btn("نسخ", CY) {
+            val e = EditText(this)
+            e.setText("1")
+            e.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            AlertDialog.Builder(this).setTitle("كم نسخة من «${m.name}»؟").setView(e)
+                .setPositiveButton("انسخ") { _, _ ->
+                    val n = (e.text.toString().trim().toIntOrNull() ?: 1).coerceIn(1, 20)
+                    Store.duplicate(m, n)
+                    Store.cur = Store.macros.size - n
+                    Store.save(this)
+                    render()
+                }
+                .setNegativeButton("إلغاء", null).show()
+        })
         acts.addView(btn("تسمية", CY) {
             ask("اسم الماكرو", m.name) { n ->
                 m.name = n
