@@ -245,6 +245,25 @@ class MainActivity : Activity() {
         }
         root.addView(c6)
 
+        // مخزنك (إيقاف عند الامتلاء)
+        val c8 = card()
+        c8.addView(tv("مخزنك (إيقاف عند الامتلاء)", 17f, TX, true))
+        c8.addView(tv("من 📷 اختر «مخزنك: ...» وحدد مستطيل حول الشريط كله (من بدايته لنهايته وبكامل ارتفاعه، بدون أيقونة العملة). البوت يقيس نسبة امتلاء الشريط ويوقف لما توصل النسبة اللي تحددها. اكتب 95 أو 100 للامتلاء.", 12f, DIM).apply {
+            setPadding(0, dp(6), 0, 0)
+        })
+        for (r in Store.own) {
+            val got = r.w > 0
+            val t = "${r.icon} ${r.name}   " + (if (got) "✔" else "✖ المنطقة ما انحددت") + "   " +
+                (if (r.min > 0) "أوقف عند: ${r.min}%" else "معطّل")
+            c8.addView(tv(t, 14f, if (got) TX else RD).apply {
+                background = box(Color.parseColor("#0F172A"), 12, LINE)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(8), 0, 0) }
+                setOnClickListener { editRes(r) }
+            })
+        }
+        root.addView(c8)
+
         // الإعدادات العامة
         val cf = Store.cfg
         val lp = if (cf.loops == 0) "∞" else "${cf.loops}"
@@ -403,10 +422,12 @@ class MainActivity : Activity() {
         val lay = LinearLayout(this)
         lay.orientation = LinearLayout.VERTICAL
         lay.setPadding(dp(20), dp(10), dp(20), 0)
-        val m = num(lay, "الحد الأدنى لـ ${r.name} (0 = معطّل)", r.min)
+        val lbl = if (r.id.startsWith("o_")) "أوقف البوت لما ${r.name} يمتلئ بنسبة % (0 = معطّل، مثلاً 100 أو 95)"
+        else "الحد الأدنى لـ ${r.name} (0 = معطّل)"
+        val m = num(lay, lbl, r.min)
         AlertDialog.Builder(this).setTitle(r.name).setView(lay)
             .setPositiveButton("حفظ") { _, _ ->
-                r.min = (m.text.toString().toLongOrNull() ?: 0L).coerceIn(0L, 100000000L)
+                r.min = (m.text.toString().toLongOrNull() ?: 0L).coerceIn(0L, if (r.id.startsWith("o_")) 100L else 100000000L)
                 Store.save(this)
                 render()
             }
