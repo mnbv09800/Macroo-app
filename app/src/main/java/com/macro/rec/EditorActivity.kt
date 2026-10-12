@@ -393,7 +393,7 @@ class EditorActivity : Activity() {
                     render()
                 })
             }
-            for (r in Store.res) {
+            for (r in Store.res + Store.own) {
                 bar.addView(chip((if (r.w > 0) "✔ " else "") + r.icon + " " + r.name, r.id == role) {
                     role = r.id
                     sv.sel = null
@@ -413,7 +413,7 @@ class EditorActivity : Activity() {
             })
             foot.addView(btn("مسح كل صور الزر", RD) {
                 Store.anchors.remove(role)
-                Store.res.firstOrNull { it.id == role }?.let { it.w = 0 }
+                (Store.res + Store.own).firstOrNull { it.id == role }?.let { it.w = 0 }
                 Store.save(this)
                 render()
             })
@@ -442,7 +442,7 @@ class EditorActivity : Activity() {
     }
 
     private fun saveAnchor() {
-        val rs = Store.res.firstOrNull { it.id == role }
+        val rs = (Store.res + Store.own).firstOrNull { it.id == role }
         if (rs == null && Store.btns.none { it.id == role }) {
             Toast.makeText(this, "اختر زر من فوق أول", Toast.LENGTH_SHORT).show()
             return
