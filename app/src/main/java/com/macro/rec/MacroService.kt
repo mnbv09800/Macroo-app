@@ -600,15 +600,13 @@ class MacroService : AccessibilityService() {
                         if (isHome && own.isNotEmpty()) {
                             val pct = own.map { Vision.fillPct(b, it.x, it.y, it.w, it.h, Store.fillKind(it.id)) }
                             val ptxt = own.indices.joinToString(" ") { "${own[it].icon}${pct[it]}%" }
-                            val fi = own.indices.firstOrNull { pct[it] >= own[it].min }
-                            if (fi != null) {
+                                                        val allFull = own.indices.all { pct[it] >= own[it].min }
+                            if (allFull) {
                                 // قراءتين على نفس الشاشة قبل ما نوقف (حتى ما يخدعنا خطأ قراءة)
                                 fullHits++
                                 if (fullHits >= 2) {
-                                    val nm = own[fi].name
-                                    val pv = pct[fi]
                                     stopAll()
-                                    toast("✅ $nm وصل $pv%، وقفت اللعب")
+                                    toast("✅ كل المخازن وصلت حدها ($ptxt)، وقفت اللعب")
                                 } else {
                                     say("📦 تأكد $ptxt")
                                     tick(poll)
