@@ -560,63 +560,70 @@ class MacroService : AccessibilityService() {
                     1 -> {
                         unknown = 0
                         val on = Store.res.filter { it.min > 0 && it.w > 0 }
-                        val own = Store.own.filter { it.min > 0 && it.w > 0 }
-                        // مخزنك: نقيس نسبة امتلاء الشريط من لونه (مو من الرقم)
-                        val pct = own.map { Vision.fillPct(b, it.x, it.y, it.w, it.h, Store.fillKind(it.id)) }
-                        val fi = own.indices.firstOrNull { pct[it] >= own[it].min }
-                        if (fi != null) {
-                            // لازم يتكرر مرتين متتاليتين حتى ما يخدعنا خطأ بالقراءة
-                            fullHits++
-                            if (fullHits >= 2) {
-                                val nm = own[fi].name
-                                val pv = pct[fi]
-                                stopAll()
-                                toast("✅ $nm وصل $pv%، وقفت اللعب")
-                            } else {
-                                say("📦 تأكد…")
-                                tick(poll)
-                            }
+                        if (on.isEmpty()) {
+                            say("🔍")
+                            lastId = ""
+                            scout()
                         } else {
-                            fullHits = 0
-                            val ptxt = own.indices.joinToString(" ") { "${own[it].icon}${pct[it]}%" }
-                            if (on.isEmpty()) {
-                                say(if (own.isEmpty()) "🔍" else "🔍 $ptxt")
-                                lastId = ""
-                                scout()
-                            } else {
-                                readAll(b, on) { vals ->
-                                    if (!bot) return@readAll
-                                    val txt = on.indices.joinToString(" ") { "${on[it].icon}${vals[it] ?: "؟"}" }
-                                    if (vals.any { it == null }) {
-                                        readFails++
-                                        if (readFails >= 5) {
-                                            stopAll()
-                                            toast("ما كدرت أقرأ الأرقام. تأكد من المستطيل (جرّب 👁)")
-                                            return@readAll
-                                        }
-                                    } else {
-                                        readFails = 0
+                            readAll(b, on) { vals ->
+                                if (!bot) return@readAll
+                                val txt = on.indices.joinToString(" ") { "${on[it].icon}${vals[it] ?: "؟"}" }
+                                if (vals.any { it == null }) {
+                                    readFails++
+                                    if (readFails >= 5) {
+                                        stopAll()
+                                        toast("ما كدرت أقرأ الأرقام. تأكد من المستطيل (جرّب 👁)")
+                                        return@readAll
                                     }
-                                    val pass = on.indices.all { (vals[it] ?: -1L) >= on[it].min }
-                                    if (pass) {
-                                        say("✅ $txt")
-                                        lastId = ""
-                                        scout()
-                                    } else {
-                                        skips++
-                                        say("⏭$skips $txt")
-                                        pressRec(d.id)
-                                        tick(poll)
-                                    }
+                                } else {
+                                    readFails = 0
+                                }
+                                val pass = on.indices.all { (vals[it] ?: -1L) >= on[it].min }
+                                if (pass) {
+                                    say("✅ $txt")
+                                    lastId = ""
+                                    scout()
+                                } else {
+                                    skips++
+                                    say("⏭$skips $txt")
+                                    pressRec(d.id)
+                                    tick(poll)
                                 }
                             }
                         }
                     }
                     else -> {
                         unknown = 0
-                        say("▶")
-                        pressRec(d.id)
-                        tick(poll)
+                        // أول زر "ضغطة عادية" بالقائمة = زر الهجوم بالقرية: هناك نفحص مخزنك
+                        val own = Store.own.filter { it.min > 0 && it.w > 0 }
+                        val isHome = Store.btns.firstOrNull { it.kind == 0 }?.id == d.id
+                        if (isHome && own.isNotEmpty()) {
+                            val pct = own.map { Vision.fillPct(b, it.x, it.y, it.w, it.h, Store.fillKind(it.id)) }
+                            val ptxt = own.indices.joinToString(" ") { "${own[it].icon}${pct[it]}%" }
+                            val fi = own.indices.firstOrNull { pct[it] >= own[it].min }
+                            if (fi != null) {
+                                // قراءتين على نفس الشاشة قبل ما نوقف (حتى ما يخدعنا خطأ قراءة)
+                                fullHits++
+                                if (fullHits >= 2) {
+                                    val nm = own[fi].name
+                                    val pv = pct[fi]
+                                    stopAll()
+                                    toast("✅ $nm وصل $pv%، وقفت اللعب")
+                                } else {
+                                    say("📦 تأكد $ptxt")
+                                    tick(poll)
+                                }
+                            } else {
+                                fullHits = 0
+                                say("📦 $ptxt")
+                                pressRec(d.id)
+                                tick(poll)
+                            }
+                        } else {
+                            say("▶")
+                            pressRec(d.id)
+                            tick(poll)
+                        }
                     }
                 }
             }
