@@ -30,13 +30,26 @@ class Step(
         }
 }
 
-class Macro(var name: String, val steps: ArrayList<Step> = ArrayList())
-
 class Cfg(
     var timeout: Long = 4000L, var tries: Int = 20, var change: Int = 8,
     var loopGap: Long = 2000L, var loops: Int = 0, var match: Int = 10,
     var poll: Long = 400L, var repress: Long = 1500L
-)
+) {
+    fun copy(): Cfg = Cfg(timeout, tries, change, loopGap, loops, match, poll, repress)
+}
+
+// كل ماكرو له خطواته وصوره وأزراره ومناطقه وإعداداته الخاصة (مستقلة تماماً عن باقي الماكرو)
+class Macro(var name: String, val steps: ArrayList<Step> = ArrayList()) {
+    val anchors = HashMap<String, ArrayList<Anchor>>()
+    val btns = ArrayList<Btn>()
+    val res = Store.newRes()
+    val own = Store.newOwn()
+    var cfg = Cfg()
+
+    init {
+        Store.fillDefaultBtns(btns)
+    }
+}
 
 // زر من اللعبة نتعرف عليه: مكانه وبصمة صورته
 class Anchor(
@@ -152,32 +165,45 @@ object Vision {
 object Store {
     val macros = ArrayList<Macro>()
     var cur = 0
-    val cfg = Cfg()
+
+    // الماكرو الحالي (ننشئ واحد إذا القائمة فارغة حتى ما يصير كراش)
+    private fun curM(): Macro {
+        if (macros.isEmpty()) macros.add(Macro("M1"))
+        if (cur !in macros.indices) cur = 0
+        return macros[cur]
+    }
+
+    // كلها تشير لبيانات الماكرو الحالي فقط، فكل ماكرو مستقل بصوره وأزراره وإعداداته
+    val cfg: Cfg get() = curM().cfg
     // كل زر ممكن يكون له أكثر من صورة (حتى يتعرف عليه بكل الظروف)
-    val anchors = HashMap<String, ArrayList<Anchor>>()
+    val anchors: HashMap<String, ArrayList<Anchor>> get() = curM().anchors
+    // الأزرار بالترتيب (البوت يفحصها من فوق لتحت)
+    val btns: ArrayList<Btn> get() = curM().btns
+    val res: ArrayList<Res> get() = curM().res
+    // مخزنك أنت (ذهب/إكسير/أسود): لما يوصل الحد اللي تحدده البوت يوقف
+    val own: ArrayList<Res> get() = curM().own
     const val MAX_IMGS = 8
 
     fun addAnchor(a: Anchor) {
         anchors.getOrPut(a.role) { ArrayList() }.add(a)
     }
-    // الأزرار بالترتيب (البوت يفحصها من فوق لتحت)
-    val btns = ArrayList<Btn>()
+
+    fun newRes() = arrayListOf(
+        Res("r_gold", "الذهب", "💰"),
+        Res("r_elixir", "الإكسير", "💧"),
+        Res("r_dark", "الإكسير الأسود", "🖤")
+    )
+
+    fun newOwn() = arrayListOf(
+        Res("o_gold", "مخزنك: الذهب", "💰"),
+        Res("o_elixir", "مخزنك: الإكسير", "💧"),
+        Res("o_dark", "مخزنك: الأسود", "🖤")
+    )
     val kinds = listOf(
         "ضغطة عادية",
         "بداية الهجوم (ينفذ الخطة المرسومة)",
         "نهاية الجولة (يرجع للبداية)",
         "موافق / إغلاق (يضغطه بأي وقت)"
-    )
-    val res = arrayListOf(
-        Res("r_gold", "الذهب", "💰"),
-        Res("r_elixir", "الإكسير", "💧"),
-        Res("r_dark", "الإكسير الأسود", "🖤")
-    )
-    // مخزنك أنت (ذهب/إكسير/أسود): لما يوصل الحد اللي تحدده البوت يوقف
-    val own = arrayListOf(
-        Res("o_gold", "مخزنك: الذهب", "💰"),
-        Res("o_elixir", "مخزنك: الإكسير", "💧"),
-        Res("o_dark", "مخزنك: الأسود", "🖤")
     )
     // حجم الشاشة اللي انحفظت عليها الإعدادات (نستخدمه لتكبير/تصغير الاستيراد)
     var refW = 0
@@ -199,7 +225,20 @@ object Store {
             for (k in s.strokes) ks.add(Stroke(k.off, k.dur, k.pts.copyOf()))
             m.steps.add(Step(ks, s.before, s.verify, s.repeat, s.repGap))
         }
+        // الصور (البصمات تُنسخ نسخ كامل) والأزرار والمناطق والإعدادات
+        for ((role, list) in src.anchors) {
+            m.anchors[role] = ArrayList(list.map { Anchor(it.role, it.x, it.y, it.w, it.h, it.sig.copyOf()) })
+        }
+        m.btns.clear()
+        for (b in src.btns) m.btns.add(Btn(b.id, b.name, b.kind))
+        for (r in src.res.indices) copyRes(src.res[r], m.res[r])
+        for (r in src.own.indices) copyRes(src.own[r], m.own[r])
+        m.cfg = src.cfg.copy()
         return m
+    }
+
+    private fun copyRes(a: Res, b: Res) {
+        b.x = a.x; b.y = a.y; b.w = a.w; b.h = a.h; b.min = a.min
     }
 
     // ينشئ n نسخة بأسماء "الاسم (2)", "الاسم (3)"... ويرجع عدد النسخ
@@ -221,21 +260,26 @@ object Store {
 
     fun roleName(k: String): String = btns.firstOrNull { it.id == k }?.name ?: k
 
-    fun defaultBtns() {
-        btns.clear()
-        btns.add(Btn("attack", "زر الهجوم (القرية)", 0))
-        btns.add(Btn("go", "زر Attack الأخضر (الجيش)", 0))
-        btns.add(Btn("find", "زر البحث عن خصم", 0))
-        btns.add(Btn("next", "زر Next", 1))
-        btns.add(Btn("home", "زر Return Home", 2))
-        btns.add(Btn("ok", "زر موافق (اختياري)", 3))
+    fun fillDefaultBtns(list: ArrayList<Btn>) {
+        list.clear()
+        list.add(Btn("attack", "زر الهجوم (القرية)", 0))
+        list.add(Btn("go", "زر Attack الأخضر (الجيش)", 0))
+        list.add(Btn("find", "زر البحث عن خصم", 0))
+        list.add(Btn("next", "زر Next", 1))
+        list.add(Btn("home", "زر Return Home", 2))
+        list.add(Btn("ok", "زر موافق (اختياري)", 3))
     }
 
     fun ensure(c: Context) {
         if (!ready) { load(c); ready = true }
     }
 
-    // كل الإعدادات كـ JSON (للحفظ والتصدير)
+    private fun cfgJson(c: Cfg) = JSONObject()
+        .put("t", c.timeout).put("k", c.tries).put("c", c.change)
+        .put("lg", c.loopGap).put("lp", c.loops).put("mt", c.match)
+        .put("pl", c.poll).put("rp", c.repress)
+
+    // كل الإعدادات كـ JSON (للحفظ والتصدير): كل ماكرو يحمل صوره وأزراره ومناطقه وإعداداته
     fun build(): JSONObject {
         val ms = JSONArray()
         for (m in macros) {
@@ -251,23 +295,23 @@ object Store {
                         .put("r", s.repeat).put("g", s.repGap)
                 )
             }
-            ms.put(JSONObject().put("n", m.name).put("s", ss))
+            val an = JSONArray()
+            for (a in m.anchors.values.flatten()) an.put(
+                JSONObject().put("r", a.role).put("x", a.x).put("y", a.y).put("w", a.w).put("h", a.h)
+                    .put("g", a.sig.joinToString(","))
+            )
+            val bt = JSONArray()
+            for (d in m.btns) bt.put(JSONObject().put("i", d.id).put("n", d.name).put("k", d.kind))
+            val rjs = JSONArray()
+            for (r in m.res + m.own) rjs.put(
+                JSONObject().put("i", r.id).put("x", r.x).put("y", r.y).put("w", r.w).put("h", r.h).put("m", r.min)
+            )
+            ms.put(
+                JSONObject().put("n", m.name).put("s", ss).put("an", an).put("bt", bt)
+                    .put("rs", rjs).put("cfg", cfgJson(m.cfg))
+            )
         }
-        val an = JSONArray()
-        for (a in anchors.values.flatten()) an.put(
-            JSONObject().put("r", a.role).put("x", a.x).put("y", a.y).put("w", a.w).put("h", a.h)
-                .put("g", a.sig.joinToString(","))
-        )
-        val bt = JSONArray()
-        for (d in btns) bt.put(JSONObject().put("i", d.id).put("n", d.name).put("k", d.kind))
-        val rjs = JSONArray()
-        for (r in res + own) rjs.put(
-            JSONObject().put("i", r.id).put("x", r.x).put("y", r.y).put("w", r.w).put("h", r.h).put("m", r.min)
-        )
-        return JSONObject().put("cur", cur).put("m", ms).put("an", an).put("bt", bt).put("rs", rjs)
-            .put("t", cfg.timeout).put("k", cfg.tries).put("c", cfg.change)
-            .put("lg", cfg.loopGap).put("lp", cfg.loops).put("mt", cfg.match)
-            .put("pl", cfg.poll).put("rp", cfg.repress)
+        return JSONObject().put("cur", cur).put("m", ms)
             .put("rw", refW).put("rh", refH)
     }
 
@@ -276,37 +320,35 @@ object Store {
             .putString("db", build().toString()).apply()
     }
 
-    // يقرأ JSON ويملأ كل شي (يرمي استثناء إذا الملف غلط)
-    private fun parse(raw: String) {
-        val o = JSONObject(raw)
-        val ms = o.getJSONArray("m")
-        macros.clear()
-        anchors.clear()
-        btns.clear()
-        for (r in res + own) { r.x = 0; r.y = 0; r.w = 0; r.h = 0; r.min = 0L }
-        cur = o.optInt("cur", 0)
-        cfg.timeout = o.optLong("t", 4000L)
-        cfg.tries = o.optInt("k", 20)
-        cfg.change = o.optInt("c", 8)
-        cfg.loopGap = o.optLong("lg", 2000L)
-        cfg.loops = o.optInt("lp", 0)
-        cfg.match = o.optInt("mt", 10)
-        cfg.poll = o.optLong("pl", 400L)
-        cfg.repress = o.optLong("rp", 1500L)
-        refW = o.optInt("rw", 0)
-        refH = o.optInt("rh", 0)
-        val bt = o.optJSONArray("bt")
+    // يقرأ الصور والأزرار والمناطق والإعدادات من src إلى الماكرو m
+    // (src = كائن الماكرو بالصيغة الجديدة، أو الملف كله بالصيغة القديمة المشتركة)
+    private fun readExtras(m: Macro, src: JSONObject) {
+        val co = src.optJSONObject("cfg") ?: src
+        val cf = Cfg()
+        cf.timeout = co.optLong("t", 4000L)
+        cf.tries = co.optInt("k", 20)
+        cf.change = co.optInt("c", 8)
+        cf.loopGap = co.optLong("lg", 2000L)
+        cf.loops = co.optInt("lp", 0)
+        cf.match = co.optInt("mt", 10)
+        cf.poll = co.optLong("pl", 400L)
+        cf.repress = co.optLong("rp", 1500L)
+        m.cfg = cf
+        val bt = src.optJSONArray("bt")
         if (bt != null) {
+            m.btns.clear()
             for (i in 0 until bt.length()) {
                 val q = bt.getJSONObject(i)
-                btns.add(Btn(q.getString("i"), q.getString("n"), q.getInt("k")))
+                m.btns.add(Btn(q.getString("i"), q.getString("n"), q.getInt("k")))
             }
         }
-        val rj = o.optJSONArray("rs")
+        if (m.btns.isEmpty()) fillDefaultBtns(m.btns)
+        val rj = src.optJSONArray("rs")
         if (rj != null) {
+            val all = m.res + m.own
             for (i in 0 until rj.length()) {
                 val q = rj.getJSONObject(i)
-                val r = (res + own).firstOrNull { it.id == q.getString("i") } ?: continue
+                val r = all.firstOrNull { it.id == q.getString("i") } ?: continue
                 r.x = q.optInt("x")
                 r.y = q.optInt("y")
                 r.w = q.optInt("w")
@@ -314,6 +356,27 @@ object Store {
                 r.min = q.optLong("m", 0L)
             }
         }
+        val an = src.optJSONArray("an")
+        if (an != null) {
+            for (i in 0 until an.length()) {
+                val q = an.getJSONObject(i)
+                val sig = q.getString("g").split(",").map { it.toInt() }.toIntArray()
+                m.anchors.getOrPut(q.getString("r")) { ArrayList() }.add(
+                    Anchor(q.getString("r"), q.getInt("x"), q.getInt("y"), q.getInt("w"), q.getInt("h"), sig)
+                )
+            }
+        }
+    }
+
+    // يقرأ JSON ويملأ كل شي (يرمي استثناء إذا الملف غلط)
+    // الملفات القديمة (صور وأزرار مشتركة) تنقرأ وتنتسخ لكل ماكرو بشكل مستقل
+    private fun parse(raw: String) {
+        val o = JSONObject(raw)
+        val ms = o.getJSONArray("m")
+        macros.clear()
+        cur = o.optInt("cur", 0)
+        refW = o.optInt("rw", 0)
+        refH = o.optInt("rh", 0)
         for (i in 0 until ms.length()) {
             val mo = ms.getJSONObject(i)
             val m = Macro(mo.getString("n"))
@@ -333,32 +396,18 @@ object Store {
                     )
                 }
             }
+            readExtras(m, if (mo.has("cfg")) mo else o)
             macros.add(m)
-        }
-        val an = o.optJSONArray("an")
-        if (an != null) {
-            for (i in 0 until an.length()) {
-                val q = an.getJSONObject(i)
-                val sig = q.getString("g").split(",").map { it.toInt() }.toIntArray()
-                addAnchor(
-                    Anchor(
-                        q.getString("r"), q.getInt("x"), q.getInt("y"), q.getInt("w"), q.getInt("h"), sig
-                    )
-                )
-            }
         }
     }
 
     private fun fix() {
-        if (btns.isEmpty()) defaultBtns()
         if (macros.isEmpty()) macros.add(Macro("M1"))
         if (cur !in macros.indices) cur = 0
     }
 
     private fun load(c: Context) {
         macros.clear()
-        anchors.clear()
-        btns.clear()
         val raw = c.getSharedPreferences("m4", Context.MODE_PRIVATE).getString("db", null)
         if (raw != null) {
             try {
@@ -369,24 +418,26 @@ object Store {
         fix()
     }
 
-    // تكبير/تصغير الإحداثيات حسب حجم شاشة الجهاز الجديد
+    // تكبير/تصغير الإحداثيات حسب حجم شاشة الجهاز الجديد (لكل الماكرو)
     private fun scale(kx: Float, ky: Float) {
-        for (m in macros) for (s in m.steps) for (k in s.strokes) {
-            for (i in k.pts.indices) k.pts[i] = k.pts[i] * (if (i % 2 == 0) kx else ky)
-        }
-        val old = anchors.values.flatten()
-        anchors.clear()
-        for (a in old) addAnchor(
-            Anchor(
-                a.role, (a.x * kx).toInt(), (a.y * ky).toInt(),
-                maxOf(2, (a.w * kx).toInt()), maxOf(2, (a.h * ky).toInt()), a.sig
+        for (m in macros) {
+            for (s in m.steps) for (k in s.strokes) {
+                for (i in k.pts.indices) k.pts[i] = k.pts[i] * (if (i % 2 == 0) kx else ky)
+            }
+            val old = m.anchors.values.flatten()
+            m.anchors.clear()
+            for (a in old) m.anchors.getOrPut(a.role) { ArrayList() }.add(
+                Anchor(
+                    a.role, (a.x * kx).toInt(), (a.y * ky).toInt(),
+                    maxOf(2, (a.w * kx).toInt()), maxOf(2, (a.h * ky).toInt()), a.sig
+                )
             )
-        )
-        for (r in res + own) {
-            r.x = (r.x * kx).toInt()
-            r.y = (r.y * ky).toInt()
-            r.w = (r.w * kx).toInt()
-            r.h = (r.h * ky).toInt()
+            for (r in m.res + m.own) {
+                r.x = (r.x * kx).toInt()
+                r.y = (r.y * ky).toInt()
+                r.w = (r.w * kx).toInt()
+                r.h = (r.h * ky).toInt()
+            }
         }
     }
 
