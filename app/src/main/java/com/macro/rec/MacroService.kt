@@ -297,6 +297,7 @@ class MacroService : AccessibilityService() {
     private fun nextSlot() {
         stopAll()
         Store.cur = (Store.cur + 1) % Store.macros.size
+        matched.clear()
         Store.save(this)
         refresh()
     }
@@ -441,7 +442,8 @@ class MacroService : AccessibilityService() {
     }
 
     private fun press(role: String) {
-        val a = matched[role] ?: Store.anchors[role]?.firstOrNull() ?: return
+        val a = matched[role]?.takeIf { Store.anchors[role]?.contains(it) == true }
+            ?: Store.anchors[role]?.firstOrNull() ?: return
         val k = Stroke(0L, 60L, floatArrayOf(a.cx.toFloat(), a.cy.toFloat()))
         tap(Step(arrayListOf(k), 0L, false)) {}
     }
