@@ -109,7 +109,7 @@ class MacroService : AccessibilityService() {
         var inst: MacroService? = null
     }
 
-    private val h = Handler(Looper.getMainLooper())
+    internal val h = Handler(Looper.getMainLooper())
     private val steps: ArrayList<Step> get() = Store.macros[Store.cur].steps
     private lateinit var wm: WindowManager
     private lateinit var panel: LinearLayout
@@ -128,6 +128,8 @@ class MacroService : AccessibilityService() {
     private var fullHits = 0
     private var lastId = ""
     private var lastAt = 0L
+    private var wall: WallBot? = null
+    private var wallIdle = false   // آخر تطوير ما سوّى شي: لا نكرره، نوقف
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -135,7 +137,7 @@ class MacroService : AccessibilityService() {
     private var banner: TextView? = null
 
     // شريط رسائل على الشاشة (بدل Toast لأن بعض الأجهزة تخفيه)
-    private fun toast(t: String) {
+    internal fun toast(t: String) {
         try {
             banner?.let {
                 try { wm.removeView(it) } catch (e: Exception) {}
@@ -273,7 +275,7 @@ class MacroService : AccessibilityService() {
         }
     }
 
-    private fun say(t: String) {
+    internal fun say(t: String) {
         if (!panelOn) return
         if (status.text.toString() == t) return
         status.text = t
@@ -304,6 +306,8 @@ class MacroService : AccessibilityService() {
 
     fun stopAll() {
         bot = false
+        wall?.cancel()
+        wall = null
         h.removeCallbacksAndMessages(null)
         if (panelOn) {
             icPlay.on = false
@@ -314,7 +318,7 @@ class MacroService : AccessibilityService() {
     // ---- لقطة الشاشة ----
     private var lastErr = 0
 
-    private fun grab(cb: (Bitmap?) -> Unit) {
+    internal fun grab(cb: (Bitmap?) -> Unit) {
         try {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
                 override fun onSuccess(r: ScreenshotResult) {
@@ -388,10 +392,10 @@ class MacroService : AccessibilityService() {
         }
     }
 
-    private val ocr by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+    internal val ocr by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     // نقرأ الرقم من كل منطقة بالـOCR (ننسخ المنطقة أول، فاللقطة الأصلية تنحذف براحتها)
-    private fun readAll(b: Bitmap, list: List<Res>, cb: (List<Long?>) -> Unit) {
+    internal fun readAll(b: Bitmap, list: List<Res>, cb: (List<Long?>) -> Unit) {
         val out = arrayOfNulls<Long>(list.size)
         var left = list.size
         if (left == 0) {
@@ -423,7 +427,7 @@ class MacroService : AccessibilityService() {
     private val matched = HashMap<String, Anchor>()
 
     // الزر يعتبر "مرئي" إذا أي صورة من صوره تطابق، ونختار الأقرب
-    private fun seen(b: Bitmap, role: String): Boolean {
+    internal fun seen(b: Bitmap, role: String): Boolean {
         val list = Store.anchors[role] ?: return false
         var best: Anchor? = null
         var bd = Double.MAX_VALUE
@@ -441,7 +445,7 @@ class MacroService : AccessibilityService() {
         return false
     }
 
-    private fun press(role: String) {
+    internal fun press(role: String) {
         val a = matched[role]?.takeIf { Store.anchors[role]?.contains(it) == true }
             ?: Store.anchors[role]?.firstOrNull() ?: return
         val k = Stroke(0L, 60L, floatArrayOf(a.cx.toFloat(), a.cy.toFloat()))
@@ -459,7 +463,7 @@ class MacroService : AccessibilityService() {
     private fun botStart() {
         stopAll()
         say("▶…")
-        val need = Store.btns.filter { it.kind != 3 && Store.anchors[it.id].isNullOrEmpty() }
+        val need = Store.btns.filter { it.kind < 3 && Store.anchors[it.id].isNullOrEmpty() }
         if (need.isNotEmpty()) {
             toast("ناقص: " + need.joinToString(" • ") { it.name })
             return
@@ -481,7 +485,19 @@ class MacroService : AccessibilityService() {
             toast("حدد منطقة الرقم لـ: " + noReg.joinToString(" • ") { it.name })
             return
         }
+        if (Store.cfg.wallOn) {
+            if (Store.anchors[WallBot.BUILD].isNullOrEmpty()) {
+                toast("ناقص: " + Store.WALL_BTN + " (حدد صورته من 📷)")
+                return
+            }
+            if (Store.own.none { it.min > 0 && it.w > 0 }) {
+                toast("تطوير الجدران يشتغل لما تمتلئ مخازنك: فعّل «مخزنك» وحدد حد الامتلاء")
+                return
+            }
+        }
         bot = true
+        wall = null
+        wallIdle = false
         phase = 0
         unknown = 0
         waited = 0
@@ -512,6 +528,7 @@ class MacroService : AccessibilityService() {
             // أزرار "موافق" أول شي، وبعدها الباقي حسب ترتيبك
             var hit: Btn? = null
             for (x in Store.btns.sortedBy { if (it.kind == 3) 0 else 1 }) {
+                if (x.kind == 4) continue
                 if (phase == 1 && x.kind == 0) continue
                 if (seen(b, x.id)) {
                     hit = x
@@ -607,14 +624,20 @@ class MacroService : AccessibilityService() {
                                 // قراءتين على نفس الشاشة قبل ما نوقف (حتى ما يخدعنا خطأ قراءة)
                                 fullHits++
                                 if (fullHits >= 2) {
-                                    stopAll()
-                                    toast("✅ كل المخازن وصلت حدها ($ptxt)، وقفت اللعب")
+                                    if (Store.cfg.wallOn && !wallIdle) {
+                                        say("🧱 مخازنك ممتلئة")
+                                        startWalls()
+                                    } else {
+                                        stopAll()
+                                        toast("✅ كل المخازن وصلت حدها ($ptxt)، وقفت اللعب")
+                                    }
                                 } else {
                                     say("📦 تأكد $ptxt")
                                     tick(poll)
                                 }
                             } else {
                                 fullHits = 0
+                                wallIdle = false
                                 say("📦 $ptxt")
                                 pressRec(d.id)
                                 tick(poll)
@@ -629,6 +652,36 @@ class MacroService : AccessibilityService() {
             }
             b.recycle()
         }
+    }
+
+    // ---- تطوير الجدران (المنطق كله بملف WallBot) ----
+    private fun startWalls() {
+        wall?.cancel()
+        lastId = ""
+        val wb = WallBot(this) { n, why -> onWallDone(n, why) }
+        wall = wb
+        wb.start()
+    }
+
+    private fun onWallDone(n: Int, why: String) {
+        wall = null
+        if (!bot) return
+        fullHits = 0
+        wallIdle = (n == 0)
+        lastId = ""
+        toast("🧱 طوّرت $n جدار ($why)")
+        tick(maxOf(Store.cfg.poll, 1500L))
+    }
+
+    // ضغطة بنقطة معينة / سحبة من نقطة لنقطة
+    internal fun tapAt(x: Int, y: Int, done: () -> Unit) {
+        val k = Stroke(0L, 60L, floatArrayOf(x.toFloat(), y.toFloat()))
+        tap(Step(arrayListOf(k), 0L, false), done)
+    }
+
+    internal fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long, done: () -> Unit) {
+        val k = Stroke(0L, ms, floatArrayOf(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat()))
+        tap(Step(arrayListOf(k), 0L, false), done)
     }
 
     // وصلنا لشاشة البحث: ننفذ خطة الهجوم
@@ -659,7 +712,7 @@ class MacroService : AccessibilityService() {
     }
 
     // ننفذ الخطوة: كل إصبع مسار (منحنى أو خط أو نقطة) بنفس توقيته
-    private fun tap(s: Step, done: () -> Unit) {
+    internal fun tap(s: Step, done: () -> Unit) {
         val b = GestureDescription.Builder()
         for (k in s.strokes) {
             val p = Path()

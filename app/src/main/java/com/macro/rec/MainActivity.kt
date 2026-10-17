@@ -228,7 +228,7 @@ class MainActivity : Activity() {
             val got = cnt > 0
             val label = tv(
                 "${i + 1}  " + (if (got) "✔ " else "✖ ") + d.name + (if (cnt > 1) " ($cnt صور)" else "") + "\n" + Store.kindName(d.kind),
-                14f, if (got || d.kind == 3) TX else RD
+                14f, if (got || d.kind >= 3) TX else RD
             )
             label.layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             label.setOnClickListener { editBtn(d) }
@@ -277,6 +277,23 @@ class MainActivity : Activity() {
             })
         }
         root.addView(c8)
+
+        // تطوير الجدران لما تمتلئ المخازن
+        val cw = card()
+        val cfw = Store.cfg
+        cw.addView(tv("تطوير الجدران عند الامتلاء", 17f, TX, true))
+        cw.addView(tv("لما كل مخازنك المحددة توصل حدها، البوت يفتح Build ويطوّر الجدران بالذهب أو الإكسير (الأكثر أولاً) لين تخلص الموارد، وبعدها يرجع يهاجم. يحتاج: صورة زر «Build» من 📷 وتفعيل «مخزنك».", 12f, DIM).apply {
+            setPadding(0, dp(6), 0, 0)
+        })
+        val wmx = if (cfw.wallMax == 0) "∞" else "${cfw.wallMax}"
+        cw.addView(
+            tv(
+                (if (cfw.wallOn) "✔ مفعّل" else "✖ معطّل") + " • يبقي ذهب ${cfw.wallKeepGold} • يبقي إكسير ${cfw.wallKeepElixir} • أقصى عدد $wmx",
+                13f, if (cfw.wallOn) GR else DIM
+            ).apply { setPadding(0, dp(8), 0, 0) }
+        )
+        cw.addView(btn("تعديل", CY) { editWall() })
+        root.addView(cw)
 
         // الإعدادات العامة
         val cf = Store.cfg
@@ -509,6 +526,32 @@ class MainActivity : Activity() {
             }
             .setNeutralButton("حذف") { _, _ ->
                 m.steps.remove(s)
+                Store.save(this)
+                render()
+            }
+            .setNegativeButton("إلغاء", null).show()
+    }
+
+    private fun editWall() {
+        val cf = Store.cfg
+        val lay = LinearLayout(this)
+        lay.orientation = LinearLayout.VERTICAL
+        lay.setPadding(dp(20), dp(10), dp(20), 0)
+        val sw = Switch(this)
+        sw.text = "تفعيل تطوير الجدران"
+        sw.isChecked = cf.wallOn
+        lay.addView(sw)
+        val kg = num(lay, "اترك هذا المقدار من الذهب ولا تصرفه (0 = اصرف كل شي)", cf.wallKeepGold)
+        val ke = num(lay, "اترك هذا المقدار من الإكسير (مفيد لتدريب الجيش) (0 = اصرف كل شي)", cf.wallKeepElixir)
+        val mx = num(lay, "أقصى عدد جدران بكل مرة (0 = بلا حد)", cf.wallMax.toLong())
+        val scroll = ScrollView(this)
+        scroll.addView(lay)
+        AlertDialog.Builder(this).setTitle("تطوير الجدران").setView(scroll)
+            .setPositiveButton("حفظ") { _, _ ->
+                cf.wallOn = sw.isChecked
+                cf.wallKeepGold = (kg.text.toString().toLongOrNull() ?: 0L).coerceIn(0L, 100000000L)
+                cf.wallKeepElixir = (ke.text.toString().toLongOrNull() ?: 0L).coerceIn(0L, 100000000L)
+                cf.wallMax = (mx.text.toString().toIntOrNull() ?: 0).coerceIn(0, 100000)
                 Store.save(this)
                 render()
             }

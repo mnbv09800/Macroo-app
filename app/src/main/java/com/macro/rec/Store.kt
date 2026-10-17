@@ -33,9 +33,15 @@ class Step(
 class Cfg(
     var timeout: Long = 4000L, var tries: Int = 20, var change: Int = 8,
     var loopGap: Long = 2000L, var loops: Int = 0, var match: Int = 10,
-    var poll: Long = 400L, var repress: Long = 1500L
+    var poll: Long = 400L, var repress: Long = 1500L,
+    // تطوير الجدران لما تمتلئ المخازن: تفعيل، مقدار يبقى من الذهب والإكسير، أقصى عدد بكل مرة (0 = بلا حد)
+    var wallOn: Boolean = false, var wallKeepGold: Long = 0L,
+    var wallKeepElixir: Long = 0L, var wallMax: Int = 0
 ) {
-    fun copy(): Cfg = Cfg(timeout, tries, change, loopGap, loops, match, poll, repress)
+    fun copy(): Cfg = Cfg(
+        timeout, tries, change, loopGap, loops, match, poll, repress,
+        wallOn, wallKeepGold, wallKeepElixir, wallMax
+    )
 }
 
 // كل ماكرو له خطواته وصوره وأزراره ومناطقه وإعداداته الخاصة (مستقلة تماماً عن باقي الماكرو)
@@ -203,7 +209,8 @@ object Store {
         "ضغطة عادية",
         "بداية الهجوم (ينفذ الخطة المرسومة)",
         "نهاية الجولة (يرجع للبداية)",
-        "موافق / إغلاق (يضغطه بأي وقت)"
+        "موافق / إغلاق (يضغطه بأي وقت)",
+        "مساعد (يستعمله بوت الجدران فقط)"
     )
     // حجم الشاشة اللي انحفظت عليها الإعدادات (نستخدمه لتكبير/تصغير الاستيراد)
     var refW = 0
@@ -268,7 +275,10 @@ object Store {
         list.add(Btn("next", "زر Next", 1))
         list.add(Btn("home", "زر Return Home", 2))
         list.add(Btn("ok", "زر موافق (اختياري)", 3))
+        list.add(Btn(WallBot.BUILD, WALL_BTN, 4))
     }
+
+    const val WALL_BTN = "زر Build (تطوير الجدران)"
 
     fun ensure(c: Context) {
         if (!ready) { load(c); ready = true }
@@ -278,6 +288,8 @@ object Store {
         .put("t", c.timeout).put("k", c.tries).put("c", c.change)
         .put("lg", c.loopGap).put("lp", c.loops).put("mt", c.match)
         .put("pl", c.poll).put("rp", c.repress)
+        .put("wo", c.wallOn).put("wg", c.wallKeepGold)
+        .put("we", c.wallKeepElixir).put("wm", c.wallMax)
 
     // كل الإعدادات كـ JSON (للحفظ والتصدير): كل ماكرو يحمل صوره وأزراره ومناطقه وإعداداته
     fun build(): JSONObject {
@@ -333,6 +345,10 @@ object Store {
         cf.match = co.optInt("mt", 10)
         cf.poll = co.optLong("pl", 400L)
         cf.repress = co.optLong("rp", 1500L)
+        cf.wallOn = co.optBoolean("wo", false)
+        cf.wallKeepGold = co.optLong("wg", 0L)
+        cf.wallKeepElixir = co.optLong("we", 0L)
+        cf.wallMax = co.optInt("wm", 0)
         m.cfg = cf
         val bt = src.optJSONArray("bt")
         if (bt != null) {
@@ -343,6 +359,8 @@ object Store {
             }
         }
         if (m.btns.isEmpty()) fillDefaultBtns(m.btns)
+        // الملفات القديمة ما فيها زر Build: نضيفه
+        if (m.btns.none { it.id == WallBot.BUILD }) m.btns.add(Btn(WallBot.BUILD, WALL_BTN, 4))
         val rj = src.optJSONArray("rs")
         if (rj != null) {
             val all = m.res + m.own
